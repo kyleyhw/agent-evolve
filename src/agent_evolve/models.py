@@ -14,6 +14,8 @@ from dataclasses import dataclass, field, asdict
 from enum import Enum
 from typing import Any, Literal
 
+from agent_evolve.eval.equivalence import EquivalenceReport
+
 
 EvolveMode = Literal["algorithm", "runtime"]
 OperatorName = Literal["mutate", "crossover", "explore"]
@@ -106,15 +108,6 @@ class ProblemSpec:
     safety: SafetySpec
     backend: BackendSpec
     version: int = 1
-
-
-@dataclass
-class EquivalenceReport:
-    equivalent: bool
-    samples_tested: int
-    counterexample: Any | None = None
-    coverage: dict[str, Any] | None = None
-    error: str | None = None
 
 
 @dataclass

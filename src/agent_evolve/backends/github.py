@@ -31,7 +31,7 @@ import re
 from typing import TYPE_CHECKING, Any
 
 from agent_evolve.backends.base import EvolveBackend, MergeNotPermittedError
-from agent_evolve.models import Candidate, ProblemSpec, ReviewerVerdict
+from agent_evolve.models import Candidate, EquivalenceReport, ProblemSpec, ReviewerVerdict
 
 if TYPE_CHECKING:  # pragma: no cover
     from github import Github
@@ -107,12 +107,20 @@ class GitHubBackend(EvolveBackend):
         self._refresh_issue_body()
         return candidate_id
 
-    def score_candidate(self, candidate_id: str, metrics: dict[str, float]) -> None:
+    def score_candidate(
+        self,
+        candidate_id: str,
+        metrics: dict[str, float],
+        *,
+        equivalence: EquivalenceReport | None = None,
+    ) -> None:
         pr = self._pr(candidate_id)
         candidate = _parse_candidate(pr.body or "")
         if candidate is None:
             raise RuntimeError(f"PR #{candidate_id} missing EVOLVE_STATE block")
         candidate.metrics.update(metrics)
+        if equivalence is not None:
+            candidate.equivalence_report = equivalence
         candidate.status = "scored"
         pr.edit(body=_render_pr_body(candidate, self.problem_id or candidate.problem_id))
         self._refresh_issue_body()

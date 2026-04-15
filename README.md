@@ -278,6 +278,31 @@ The same data renders as an interactive D3 tree in
 [`examples/evolve-report.html`](examples/evolve-report.html) with click-through
 inspectors, a timeline view, and PNG export.
 
+### End-to-end demo
+
+[`examples/demo_run.py`](examples/demo_run.py) drives the full pipeline
+without agents — hardcoded candidate variants of `fib(n)` (naive recursive →
+memoised → buggy forward-loop → correct iterative) flow through the real
+eval runner, scope enforcer, equivalence checker, reviewer, and visualiser.
+
+```bash
+uv run python examples/demo_run.py
+```
+
+Expected output (four candidates across three rounds; the buggy one is
+rejected when the equivalence checker finds `fib(0)` returning `1` instead
+of `0`):
+
+```
+  #1  R1 explore    2598.02µs   REQUEST_CHANGES
+  #2  R2 mutate        0.10µs   APPROVE          ← winner
+  #3  R2 mutate        0.56µs   REJECT           (non-equivalent)
+  #4  R3 crossover     0.58µs   APPROVE
+```
+
+The demo also writes [`examples/demo-report.html`](examples/demo-report.html)
+— the D3 report for this exact run.
+
 ## CLI
 
 ```bash

@@ -20,7 +20,7 @@ from __future__ import annotations
 from abc import ABC, abstractmethod
 from typing import Any, final
 
-from agent_evolve.models import Candidate, ProblemSpec, ReviewerVerdict
+from agent_evolve.models import Candidate, EquivalenceReport, ProblemSpec, ReviewerVerdict
 
 
 class MergeNotPermittedError(RuntimeError):
@@ -86,8 +86,19 @@ class EvolveBackend(ABC):
         """Submit a new candidate attempt. Returns the candidate id assigned by the backend."""
 
     @abstractmethod
-    def score_candidate(self, candidate_id: str, metrics: dict[str, float]) -> None:
-        """Record evaluation results for a candidate and move its status to ``scored``."""
+    def score_candidate(
+        self,
+        candidate_id: str,
+        metrics: dict[str, float],
+        *,
+        equivalence: EquivalenceReport | None = None,
+    ) -> None:
+        """Record evaluation results for a candidate and move its status to ``scored``.
+
+        In runtime mode the supervisor attaches the :class:`EquivalenceReport`
+        here so the reviewer (and the persistent state) can see whether the
+        candidate preserves the parent's logic.
+        """
 
     @abstractmethod
     def record_verdict(self, candidate_id: str, verdict: ReviewerVerdict) -> None:

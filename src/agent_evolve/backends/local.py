@@ -25,7 +25,7 @@ from pathlib import Path
 from typing import Any
 
 from agent_evolve.backends.base import EvolveBackend
-from agent_evolve.models import Candidate, ProblemSpec, ReviewerVerdict
+from agent_evolve.models import Candidate, EquivalenceReport, ProblemSpec, ReviewerVerdict
 
 
 DEFAULT_ROOT = "evolve-state"
@@ -64,9 +64,17 @@ class LocalBackend(EvolveBackend):
         self._append_trait_row(candidate)
         return candidate.candidate_id
 
-    def score_candidate(self, candidate_id: str, metrics: dict[str, float]) -> None:
+    def score_candidate(
+        self,
+        candidate_id: str,
+        metrics: dict[str, float],
+        *,
+        equivalence: EquivalenceReport | None = None,
+    ) -> None:
         candidate = self._read_candidate(candidate_id)
         candidate.metrics.update(metrics)
+        if equivalence is not None:
+            candidate.equivalence_report = equivalence
         candidate.status = "scored"
         self._write_candidate(candidate)
         self._refresh_trait_row(candidate)

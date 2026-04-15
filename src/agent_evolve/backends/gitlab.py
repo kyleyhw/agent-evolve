@@ -32,7 +32,7 @@ from agent_evolve.backends.github import (
     _render_pr_body,
     _render_verdict_comment,
 )
-from agent_evolve.models import Candidate, ProblemSpec, ReviewerVerdict
+from agent_evolve.models import Candidate, EquivalenceReport, ProblemSpec, ReviewerVerdict
 
 
 class GitLabBackend(EvolveBackend):
@@ -83,9 +83,17 @@ class GitLabBackend(EvolveBackend):
         self._refresh_issue()
         return mr_iid
 
-    def score_candidate(self, candidate_id: str, metrics: dict[str, float]) -> None:
+    def score_candidate(
+        self,
+        candidate_id: str,
+        metrics: dict[str, float],
+        *,
+        equivalence: EquivalenceReport | None = None,
+    ) -> None:
         candidate = self._load(candidate_id)
         candidate.metrics.update(metrics)
+        if equivalence is not None:
+            candidate.equivalence_report = equivalence
         candidate.status = "scored"
         self._update_mr(candidate_id, candidate)
         self._refresh_issue()
