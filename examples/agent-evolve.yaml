@@ -1,0 +1,52 @@
+# Example manifest for agent-evolve.
+#
+# Drop this file (renamed to `agent-evolve.yaml`) into the directory you want to
+# evolve. Every section below except `problem:`, `scope:`, and `backend:` has
+# sensible defaults — a minimal config is ~5 lines.
+version: 1
+
+problem:
+  description: "Optimise the order pricing calculator for speed and accuracy"
+  mode: runtime                         # algorithm | runtime
+  eval_command: "pytest tests/pricing/ --benchmark-json=benchmark.json"
+  metrics:
+    - name: duration_ms
+      optimise: minimize
+    - name: test_pass_rate
+      optimise: maximize
+      minimum: 1.0                      # hard constraint — must be 100%
+
+scope:
+  target_files:
+    - src/pricing/calculator.py
+    - src/pricing/utils.py
+  do_not_touch:
+    - src/auth/
+    - src/db/
+    - src/pricing/models.py
+  max_diff_files: 3
+
+evolution:
+  rounds: 5
+  candidates_per_round: 3
+  operators: [mutate, crossover, explore]
+  prune_strategy: pareto                # pareto | top_k
+
+runtime_mode:
+  equivalence_check: required           # required | optional | disabled
+  property_test_samples: 500
+  regression_tests: "pytest tests/pricing/ -x"
+
+safety:
+  protected_branch: main
+  # agents_can_merge is hardcoded False in every backend — this line is
+  # informational only; the code ignores any override.
+  agents_can_merge: false
+  require_human_approval: true
+  final_pr_reviewers:
+    - kyleyhw
+
+backend:
+  type: local                           # local | github | gitlab
+  repo: kyleyhw/agent-evolve            # used by github / gitlab backends
+  root_dir: evolve-state                # used by local backend
