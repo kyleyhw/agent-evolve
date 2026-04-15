@@ -201,35 +201,35 @@ schema with every option documented.
 
 ## How it works
 
-```
-┌────────────────────┐
-│   Supervisor       │  orchestrates rounds, picks operators, prunes,
-│   (SKILL.md)       │  regenerates graph, opens the final PR
-└──────────┬─────────┘
-           │
-           ├─── dispatches ──> ┌──────────────┐
-           │                   │   Explorer   │   one per candidate slot
-           │                   │   (SKILL.md) │   writes hypothesis, codes
-           │                   └──────┬───────┘   inside scope manifest
-           │                          ▼
-           │                   ┌──────────────┐
-           │                   │   Eval       │   runs eval_command,
-           │                   │   Runner     │   parses metrics (JSON/KV)
-           │                   └──────┬───────┘
-           │                          ▼
-           │                   ┌──────────────┐   property-based tests
-           │                   │ Equivalence  │   in runtime mode only
-           │                   └──────┬───────┘
-           │                          ▼
-           │                   ┌──────────────┐
-           └───── gates ─────> │   Reviewer   │   APPROVE / REJECT with
-                               │   (SKILL.md) │   itemised checklist
-                               └──────────────┘
+```mermaid
+flowchart TD
+    S["<b>Supervisor</b><br/><i>skills/supervisor/SKILL.md</i><br/>orchestrates rounds · picks operators<br/>prunes · regenerates graph · finalizes"]
+    E["<b>Explorer</b><br/><i>skills/explorer/SKILL.md</i><br/>one per candidate slot<br/>writes hypothesis · codes inside scope"]
+    R["<b>Eval Runner</b><br/>runs <code>eval_command</code><br/>parses JSON / KEY=VALUE metrics"]
+    Q["<b>Equivalence</b><br/>property-based tests via <code>hypothesis</code><br/>runtime mode only"]
+    V["<b>Reviewer</b><br/><i>skills/reviewer/SKILL.md</i><br/>APPROVE / REQUEST_CHANGES / REJECT<br/>with itemised checklist"]
+    B[("<b>Backend</b><br/>local · github · gitlab")]
+    Z["<b>Visualizer</b><br/>Mermaid diagram · D3.js HTML"]
+    H["evolve-report.html"]
 
-     ┌─────────────────┐      ┌──────────────┐      ┌──────────────┐
-     │   Backend       │◀────▶│  Visualizer  │─────▶│  HTML report │
-     │ local / gh / gl │      │  Mermaid+D3  │      │  evolve-...  │
-     └─────────────────┘      └──────────────┘      └──────────────┘
+    S -- "dispatches" --> E
+    E --> R
+    R --> Q
+    Q --> V
+    S -- "gates" --> V
+    S <--> B
+    V --> B
+    B --> Z
+    Z --> H
+
+    style S fill:#2c74b3,color:#fff,stroke:#174978,stroke-width:2px
+    style V fill:#2d8a4e,color:#fff,stroke:#1b5e37,stroke-width:2px
+    style E fill:#d4b483,color:#111,stroke:#8c7148
+    style R fill:#d4b483,color:#111,stroke:#8c7148
+    style Q fill:#d4b483,color:#111,stroke:#8c7148
+    style B fill:#3b4358,color:#fff,stroke:#242a35
+    style Z fill:#3b4358,color:#fff,stroke:#242a35
+    style H fill:#10141b,color:#e6e8ec,stroke:#242a35
 ```
 
 Every round:
@@ -247,6 +247,36 @@ Every round:
 
 After the last round, the supervisor calls `backend.finalize(winner_id)` —
 closing losers, opening the final PR, and stopping. A human merges.
+
+### Example: 4-candidate run over 3 rounds
+
+A snapshot of the Mermaid graph that the supervisor attaches to the problem
+Issue after each round (regenerated from [`examples/evolve-graph.mmd`](examples/evolve-graph.mmd)):
+
+```mermaid
+graph TD
+    ROOT["Problem #42 — pricing calculator"]
+    c1["candidate-1<br/>operator: explore<br/>R1 · 120ms<br/>status: pruned"]
+    c2["candidate-2<br/>operator: mutate<br/>R2 · 88ms<br/>status: approved"]
+    c3["candidate-3<br/>operator: explore<br/>R2 · 95ms<br/>status: approved"]
+    c4["candidate-4 ⭐<br/>operator: crossover<br/>R3 · 61ms<br/>status: WINNER"]
+
+    ROOT --> c1
+    c1 --> c2
+    c1 --> c3
+    c2 --> c4
+    c3 --> c4
+
+    style ROOT fill:#3b4358,color:#fff,stroke:#242a35
+    style c1 fill:#888,color:#fff,stroke:#555
+    style c2 fill:#2c74b3,color:#fff,stroke:#174978
+    style c3 fill:#2c74b3,color:#fff,stroke:#174978
+    style c4 fill:#2d8a4e,color:#fff,stroke:#1b5e37,stroke-width:2px
+```
+
+The same data renders as an interactive D3 tree in
+[`examples/evolve-report.html`](examples/evolve-report.html) with click-through
+inspectors, a timeline view, and PNG export.
 
 ## CLI
 
