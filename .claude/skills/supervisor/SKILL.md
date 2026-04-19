@@ -75,7 +75,8 @@ block in the problem description).
 
 For each slot, assign one parent (or two, for crossover) and the operator.
 Spawn an explorer agent per slot — they work in parallel. Each explorer
-follows `skills/explorer/SKILL.md`.
+follows `.claude/skills/explorer/SKILL.md` (invocable as `/explorer` once
+registered, or via the `Agent` tool for parallel subagent execution).
 
 ### Phase D — Collect and score
 
@@ -93,8 +94,8 @@ For each returned candidate:
 ### Phase E — Reviewer pass
 
 For every scored candidate that is not already rejected, call the reviewer
-agent (see `skills/reviewer/SKILL.md`). Attach the verdict with
-`backend.record_verdict`.
+agent (see `.claude/skills/reviewer/SKILL.md`; invocable as `/reviewer`).
+Attach the verdict with `backend.record_verdict`.
 
 ### Phase F — Prune
 

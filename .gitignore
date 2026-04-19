@@ -32,8 +32,10 @@ coverage.xml
 .DS_Store
 Thumbs.db
 
-# Claude Code
-.claude/
+# Claude Code — track committed project skills, ignore session/user state
+.claude/*
+!.claude/skills/
+!.claude/settings.json
 
 # agent-evolve runtime artifacts (ignore at repo root only — examples/ is kept)
 /evolve-state/

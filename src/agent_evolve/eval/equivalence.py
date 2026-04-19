@@ -11,7 +11,7 @@ the outputs are identical.
 * No uncaught side effects on a supplied observer.
 
 The reviewer treats a missing or failed equivalence report as grounds for
-rejection — see ``skills/reviewer/SKILL.md``.
+rejection — see ``.claude/skills/reviewer/SKILL.md``.
 """
 
 from __future__ import annotations

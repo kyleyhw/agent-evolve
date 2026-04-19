@@ -47,7 +47,7 @@ agent-evolve/
 ├── README.md                      ← usage guide (write last)
 ├── agent-evolve.yaml              ← example per-module config
 │
-├── skills/                        ← SKILL.md prompt files (the "brain")
+├── .claude/skills/                ← SKILL.md prompt files (the "brain")
 │   ├── supervisor/SKILL.md        ← orchestrates rounds
 │   ├── explorer/SKILL.md          ← generates candidate solutions
 │   └── reviewer/SKILL.md          ← reviews and approves/rejects candidates
@@ -89,7 +89,7 @@ reasoning prompts.
 Reference: [`gh-evolve`'s SKILL.md approach](https://github.com/kaiwong-sapiens/gh-evolve) is the
 canonical example of this pattern. Read it before writing these.
 
-**`skills/supervisor/SKILL.md`** — tells the supervisor agent how to:
+**`.claude/skills/supervisor/SKILL.md`** — tells the supervisor agent how to:
 - Read the current leaderboard and Trait Matrix
 - Decide which operator to apply this round (mutate / crossover / explore)
 - Dispatch tasks to explorer agents
@@ -99,14 +99,14 @@ canonical example of this pattern. Read it before writing these.
 - Call `src/viz/` to regenerate the Mermaid diagram and HTML report after each round
 - Know when to finalize: open the final PR against `main` with full context, then stop — do not merge
 
-**`skills/explorer/SKILL.md`** — tells explorer agents how to:
+**`.claude/skills/explorer/SKILL.md`** — tells explorer agents how to:
 - Read the parent candidate and understand what made it good or bad
 - Apply the assigned operator faithfully
 - Write a structured hypothesis before generating code
 - Embed the `EVOLVE_STATE` metadata block in the candidate
 - Respect the module scope manifest (never touch out-of-scope files)
 
-**`skills/reviewer/SKILL.md`** — tells the reviewer agent how to:
+**`.claude/skills/reviewer/SKILL.md`** — tells the reviewer agent how to:
 - Read the original and candidate versions side by side
 - In algorithm mode: check for scope violations, test coverage, metric improvement
 - In runtime mode: check control flow, return values, side effects, edge cases
@@ -445,9 +445,9 @@ Build in this sequence. Each phase is usable before the next begins.
 - [ ] Test: run scope enforcer against a sample diff
 
 ### Phase 2 — Skill files
-- [ ] Write `skills/explorer/SKILL.md` (reference [`gh-evolve` SKILL.md](https://github.com/kaiwong-sapiens/gh-evolve) for format and protocol)
-- [ ] Write `skills/reviewer/SKILL.md`
-- [ ] Write `skills/supervisor/SKILL.md` (include branching protocol: create `evolve/` branches, never commit to `main`)
+- [ ] Write `.claude/skills/explorer/SKILL.md` (reference [`gh-evolve` SKILL.md](https://github.com/kaiwong-sapiens/gh-evolve) for format and protocol)
+- [ ] Write `.claude/skills/reviewer/SKILL.md`
+- [ ] Write `.claude/skills/supervisor/SKILL.md` (include branching protocol: create `evolve/` branches, never commit to `main`)
 - [ ] Test: manually run a single round using the local backend and the explorer skill
 
 ### Phase 3 — Eval + Equivalence

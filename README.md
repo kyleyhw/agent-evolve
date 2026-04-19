@@ -151,28 +151,51 @@ backend = GitHubBackend(spec)
 in their bodies. The supervisor's `finalize()` opens a non-draft PR from the
 winner's branch against `main` and **stops** — a human reviewer merges.
 
-## Using the supervisor / explorer / reviewer agents
+## Using the supervisor / explorer / reviewer skills
 
-The three agents in `skills/*/SKILL.md` are the canonical drivers. Point your
-agent runner (Claude Code, a custom harness, whatever) at a skill file and
-hand it the manifest path. Each skill is self-contained and references the
-Python tooling by its public API — no extra wiring required.
+The three skills in `.claude/skills/*/SKILL.md` are the canonical drivers.
+They are plain Markdown files with YAML frontmatter — any agent runner that
+speaks the Claude-Code skills convention picks them up automatically.
 
-Typical orchestration:
+### Registration (Claude Code)
 
-1. Spawn the supervisor agent with `skills/supervisor/SKILL.md` and the
-   manifest path.
+Claude Code discovers skills by directory layout alone — no configuration
+required. The repo already has the right shape:
+
+```
+agent-evolve/
+└── .claude/
+    └── skills/
+        ├── supervisor/SKILL.md   →  /supervisor
+        ├── explorer/SKILL.md     →  /explorer
+        └── reviewer/SKILL.md     →  /reviewer
+```
+
+When Claude Code is started inside the repo, the three skills become
+available as slash commands. Claude can also auto-invoke them when the
+conversation matches the skill's `description` / `when_to_use` frontmatter.
+
+To make the skills available globally (any project), symlink or copy the
+directories under `~/.claude/skills/` instead.
+
+### Typical orchestration
+
+1. User runs `/supervisor examples/agent-evolve.yaml` (or any manifest path).
 2. The supervisor reads the Trait Matrix, chooses operators for the round,
-   and spawns one explorer per slot (`skills/explorer/SKILL.md`).
-3. Each explorer produces a candidate on `evolve/<problem>/candidate-<n>`.
-4. The supervisor runs the eval + equivalence pipeline, then spawns the
-   reviewer (`skills/reviewer/SKILL.md`) for each scored candidate.
+   and spawns one explorer per slot — either by invoking `/explorer` in turn
+   or by calling the `Agent` tool for parallel subagent execution.
+3. Each explorer produces a candidate on branch `evolve/<problem>/candidate-<n>`.
+4. The supervisor runs the eval + equivalence pipeline, then calls `/reviewer`
+   for each scored candidate and records the verdict via `backend.record_verdict`.
 5. After the final round, the supervisor calls `backend.finalize(winner)` and
-   returns the PR URL.
+   reports the PR URL. A human merges.
 
-The agents only ever touch the backend through its public interface — you can
-swap `LocalBackend` for `GitHubBackend` or `GitLabBackend` without changing
-any agent prompts.
+See [`docs/skills.md`](docs/skills.md) for the full invocation guide — custom
+runners, frontmatter reference, and how to swap the skills for your own.
+
+The skills only ever touch the backend through its public interface, so you
+can swap `LocalBackend` for `GitHubBackend` or `GitLabBackend` without
+changing any prompts.
 
 ## Example manifest
 
@@ -203,11 +226,11 @@ schema with every option documented.
 
 ```mermaid
 flowchart TD
-    S["<b>Supervisor</b><br/><i>skills/supervisor/SKILL.md</i><br/>orchestrates rounds · picks operators<br/>prunes · regenerates graph · finalizes"]
-    E["<b>Explorer</b><br/><i>skills/explorer/SKILL.md</i><br/>one per candidate slot<br/>writes hypothesis · codes inside scope"]
+    S["<b>Supervisor</b><br/><i>.claude/skills/supervisor/SKILL.md</i><br/>orchestrates rounds · picks operators<br/>prunes · regenerates graph · finalizes"]
+    E["<b>Explorer</b><br/><i>.claude/skills/explorer/SKILL.md</i><br/>one per candidate slot<br/>writes hypothesis · codes inside scope"]
     R["<b>Eval Runner</b><br/>runs <code>eval_command</code><br/>parses JSON / KEY=VALUE metrics"]
     Q["<b>Equivalence</b><br/>property-based tests via <code>hypothesis</code><br/>runtime mode only"]
-    V["<b>Reviewer</b><br/><i>skills/reviewer/SKILL.md</i><br/>APPROVE / REQUEST_CHANGES / REJECT<br/>with itemised checklist"]
+    V["<b>Reviewer</b><br/><i>.claude/skills/reviewer/SKILL.md</i><br/>APPROVE / REQUEST_CHANGES / REJECT<br/>with itemised checklist"]
     B[("<b>Backend</b><br/>local · github · gitlab")]
     Z["<b>Visualizer</b><br/>Mermaid diagram · D3.js HTML"]
     H["evolve-report.html"]
@@ -349,14 +372,18 @@ src/agent_evolve/
     scope/        enforcer.py
     viz/          graph.py  mermaid.py  html_report.py
     models.py     config.py  cli.py
-skills/
+.claude/skills/                 ← auto-discovered by Claude Code
     supervisor/SKILL.md
     explorer/SKILL.md
     reviewer/SKILL.md
+docs/
+    skills.md                   ← registration + invocation guide
 examples/
     agent-evolve.yaml
     evolve-graph.mmd            ← sample Mermaid output
     evolve-report.html          ← sample interactive D3 report
+    demo_run.py                 ← end-to-end pipeline demo
+    demo-report.html            ← report generated by demo_run.py
 tests/
     test_backends.py  test_equivalence.py  test_eval_runner.py
     test_scope.py     test_viz.py          test_config.py
