@@ -135,12 +135,8 @@ do this for you:
 >  re-run it in CI."
 
 Or copy [`examples/agent-evolve.yaml`](examples/agent-evolve.yaml) as a
-template and edit in place. The "What the skills are good at" section
-below shows manifest shapes for several use cases; the full field-by-field
-reference — every allowed value for `mode`, `prune_strategy`,
-`equivalence_check`, how metric `name`s flow from your eval command's
-stdout, scope glob patterns, and so on — lives in
-[`docs/manifest.md`](docs/manifest.md).
+template and edit in place. The full field-by-field reference can be
+found at [`docs/manifest.md`](docs/manifest.md).
 
 **After the run:**
 
