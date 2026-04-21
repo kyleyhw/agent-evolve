@@ -523,17 +523,127 @@ runtime_mode:
 
 ## Editing the manifest with Claude
 
-Ask Claude in plain English:
+Every knob in this document can be set with a plain-English prompt —
+nothing needs to be typed into the YAML by hand if you don't want to.
+Claude edits the file and re-runs
+`agent-evolve validate agent-evolve.yaml` to confirm the result parses.
 
-> "In my `agent-evolve.yaml`, add `src/pricing/v2/` to the target files and
->  set `property_test_samples` to 2000."
+### Per-field prompts
 
-> "I want to optimise both runtime and memory. Add a `memory_mb` metric
->  (minimize) and teach my eval script to emit it alongside the existing
->  `duration_ms` key."
+Grouped by manifest section so you can grab the one closest to what you
+want and reword.
 
-> "Switch the backend to GitHub using `kyleyhw/my-project`, and add me as
->  a final PR reviewer."
+#### `problem.mode`
 
-Claude edits the manifest and runs `agent-evolve validate agent-evolve.yaml`
-to confirm the result parses.
+> "Switch the manifest to runtime mode — I want the behaviour preserved
+>  while we optimise speed."
+
+> "Change mode to algorithm. I want the reviewer to allow behavioural
+>  changes as long as the metrics improve."
+
+#### `problem.eval_command`
+
+> "Change the eval command to `pytest tests/pricing/ --benchmark-json=out.json`
+>  and make sure the metrics the reviewer expects match what that command
+>  emits."
+
+> "My eval script prints metrics as `KEY=VALUE` lines, not JSON. Confirm
+>  the current `eval_command` works with that format."
+
+#### `problem.metrics`
+
+> "Add a `memory_mb` metric (minimize) alongside `duration_ms`. Update my
+>  eval script to emit it too."
+
+> "Tighten the `test_pass_rate` constraint — it should be a hard minimum
+>  of 1.0, not just a preference."
+
+> "Remove the `duration_ms` maximum — I don't want an upper ceiling, just
+>  a minimise direction."
+
+#### `scope.target_files` and `scope.do_not_touch`
+
+> "Add `src/pricing/v2/` to `target_files` and put `src/pricing/v1/` into
+>  `do_not_touch`."
+
+> "Broaden the scope to anything under `src/pricing/**` but keep
+>  `src/pricing/models.py` off-limits."
+
+> "Add `tests/` to `do_not_touch` so no candidate can 'fix' failing tests
+>  by deleting them."
+
+#### `scope.max_diff_files`
+
+> "Cap the diff at 2 files per candidate — the reviewer should reject
+>  anything broader."
+
+> "Remove the `max_diff_files` limit; I want to allow wider refactors."
+
+#### `evolution.rounds` and `evolution.candidates_per_round`
+
+> "Run 8 rounds instead of 5, with 4 candidates per round."
+
+#### `evolution.operators`
+
+> "Restrict the operators to `mutate` only — I want minimal architectural
+>  change."
+
+> "Drop `explore` from the operator list. Keep mutation and crossover."
+
+#### `evolution.prune_strategy`
+
+> "Switch `prune_strategy` to `top_k` — I only have one metric that
+>  matters."
+
+> "Use `pareto` pruning. I have three competing objectives (Sharpe,
+>  drawdown, win rate)."
+
+#### `runtime_mode.equivalence_check`
+
+> "Set `equivalence_check` to `required`. Do not accept any candidate that
+>  fails the property-based check."
+
+> "Disable the equivalence check for this run — the target function hits
+>  a database and can't be tested under hypothesis."
+
+#### `runtime_mode.property_test_samples`
+
+> "Bump `property_test_samples` to 2000 — the input space is large and I
+>  want a stronger guarantee."
+
+#### `runtime_mode.regression_tests`
+
+> "Add a regression_tests command: `pytest -x` across the whole suite.
+>  The reviewer should run it as a smoke check on every candidate."
+
+#### `safety.final_pr_reviewers`
+
+> "Add `kyleyhw` and `senior-reviewer` as required reviewers on the final
+>  PR."
+
+#### `backend.type`
+
+> "Switch the backend to GitHub using `kyleyhw/my-project`. Set
+>  `GH_TOKEN` from my `.env`."
+
+> "Change to the GitLab backend pointing at `myorg/myrepo` on the
+>  self-hosted instance at `https://gitlab.internal`. Set `GITLAB_URL`
+>  accordingly."
+
+### Compound edits
+
+You can bundle multiple knob changes into one prompt — Claude will edit
+all of them and validate once:
+
+> "Make three changes to the manifest: switch to runtime mode, add
+>  `memory_mb` (minimize) as a second metric, and cap `max_diff_files`
+>  at 2."
+
+### Starting from scratch
+
+> "Create an `agent-evolve.yaml` for optimising `src/graphs/dijkstra.py`
+>  to fix the three failing tests in `tests/graphs/`. Block candidates
+>  from touching the tests. Use 8 rounds. Local backend."
+
+Claude produces a full manifest, validates it, and tells you what it
+chose for any fields you didn't specify.

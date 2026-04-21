@@ -136,7 +136,11 @@ do this for you:
 
 Or copy [`examples/agent-evolve.yaml`](examples/agent-evolve.yaml) as a
 template and edit in place. The "What the skills are good at" section
-below shows manifest shapes for several use cases.
+below shows manifest shapes for several use cases; the full field-by-field
+reference — every allowed value for `mode`, `prune_strategy`,
+`equivalence_check`, how metric `name`s flow from your eval command's
+stdout, scope glob patterns, and so on — lives in
+[`docs/manifest.md`](docs/manifest.md).
 
 **After the run:**
 
@@ -298,47 +302,6 @@ All three are plain Markdown with YAML frontmatter. See
 discovers them, how to make them available globally, how to tell Claude to
 drive them from a custom agent runner, the frontmatter reference, and how
 to fork the skills for a different optimisation target.
-
-## Example manifest
-
-**The YAML is optional.** For one-off runs, just tell Claude what you
-want — `/evolve` infers the spec from natural language. Use a manifest
-when you want reproducibility (CI, repeated runs) or fine-grained tuning.
-
-A minimal `agent-evolve.yaml` lives alongside the code you want to evolve:
-
-```yaml
-problem:
-  description: "Optimise the order pricing calculator"
-  mode: runtime
-  eval_command: "pytest tests/pricing/ --benchmark-json=benchmark.json"
-  metrics:
-    - {name: duration_ms, optimise: minimize}
-    - {name: test_pass_rate, optimise: maximize, minimum: 1.0}
-
-scope:
-  target_files: [src/pricing/calculator.py, src/pricing/utils.py]
-  do_not_touch: [src/auth/, src/pricing/models.py]
-
-backend:
-  type: github
-  repo: your-org/your-repo
-```
-
-**Full field reference:** [`docs/manifest.md`](docs/manifest.md) — covers
-every option (`mode: algorithm | runtime`, `prune_strategy: pareto | top_k`,
-`equivalence_check: required | optional | disabled`, etc.), how metric
-`name`s flow from your eval command's stdout (JSON or `KEY=VALUE`), scope
-glob patterns, and common manifest shapes for runtime / correctness /
-statistical / refactor runs.
-
-The fully-commented example is in
-[`examples/agent-evolve.yaml`](examples/agent-evolve.yaml).
-
-Ask Claude to edit your manifest in plain English:
-
-> "Add `src/pricing/v2/` to the target files and bump
->  `property_test_samples` to 2000."
 
 ## How it works
 
