@@ -1,11 +1,16 @@
 # agent-evolve
 
+> **This repo is a skills bundle you install once and use across any number
+> of other projects.** It is not a project you evolve in place. The three
+> skills under `.claude/skills/` are meant to live at user scope
+> (`~/.claude/skills/`) so the `/supervisor`, `/explorer`, `/reviewer`
+> commands are available in every repo you open with Claude Code.
+>
 > **Read this as instructions you give to Claude, not as commands you run
-> yourself.** agent-evolve is an AI-driven tool — Claude is the one that
-> runs the supervisor / explorer / reviewer skills, calls the Python
+> yourself.** Claude is the one that runs the skills, calls the Python
 > tooling, opens branches, and produces the final PR. You, the human, drive
-> it by telling Claude what to optimise and then reviewing the PR Claude
-> leaves open for you.
+> it by telling Claude what to optimise in your target project and then
+> reviewing the PR Claude leaves open against `main`.
 
 An evolutionary search system for codebases using cooperating language-model
 agents on isolated git branches. Written with the goal of producing
@@ -42,65 +47,143 @@ equivalence checking, and an interactive D3.js evolution graph.
   GitHub rendering, plus a standalone interactive D3.js HTML report with
   lineage and timeline views.
 
-## Quickstart — what to tell Claude
+## Install (once per machine)
 
-### 1. Open the repo in Claude Code
+agent-evolve is a skills bundle + supporting Python package. Install both
+once; after that every repo you open with Claude Code has `/supervisor`,
+`/explorer`, `/reviewer` available.
 
-No install step for the skills — Claude Code auto-discovers every
-`SKILL.md` under `.claude/skills/`. Confirm with:
+### 1. Clone this repo
 
+```bash
+git clone https://github.com/kyleyhw/agent-evolve.git
+cd agent-evolve
 ```
-/supervisor   <Tab>
-```
 
-If `/supervisor`, `/explorer`, `/reviewer` are not offered, tell Claude:
-
-> "The skills under `.claude/skills/` are not showing up as slash commands.
->  Diagnose and fix."
-
-### 2. Install the Python dependencies
+### 2. Install the Python package
 
 Tell Claude:
 
-> "Install the project dependencies with uv."
+> "Install agent-evolve as a uv tool from the current directory."
 
-Claude runs `uv sync --extra dev`. (Requires Python 3.12+.)
+Or directly:
 
-### 3. Write the manifest
-
-Either edit `examples/agent-evolve.yaml` by hand, or delegate:
-
-> "Create an `agent-evolve.yaml` for optimising `src/pricing/calculator.py`.
->  Metrics: `duration_ms` minimize and `test_pass_rate` maximize with
->  `minimum: 1.0`. Eval command: `pytest tests/pricing/`."
-
-Claude will write the manifest using the example as a template.
-
-### 4. Tell Claude to start the evolution
-
-Slash-command form:
-
-```
-/supervisor my-project/agent-evolve.yaml
+```bash
+uv tool install --from . agent-evolve
 ```
 
-Natural-language form — Claude will choose `/supervisor` from the skill's
-`description`:
+This exposes the `agent-evolve` CLI (manifest validator + report renderer)
+and makes the `agent_evolve` Python package importable from any venv.
+Requires Python 3.12+.
+
+### 3. Install the skills at user scope
+
+Tell Claude:
+
+> "Install the agent-evolve skills globally. Symlink each directory under
+>  `.claude/skills/` into `~/.claude/skills/` so `/supervisor`, `/explorer`,
+>  and `/reviewer` work from every repo."
+
+Or directly — Linux / macOS / WSL:
+
+```bash
+mkdir -p ~/.claude/skills
+ln -s "$(pwd)/.claude/skills/supervisor" ~/.claude/skills/supervisor
+ln -s "$(pwd)/.claude/skills/explorer"   ~/.claude/skills/explorer
+ln -s "$(pwd)/.claude/skills/reviewer"   ~/.claude/skills/reviewer
+```
+
+Windows (PowerShell, elevated):
+
+```powershell
+New-Item -ItemType Directory -Force -Path "$HOME\.claude\skills" | Out-Null
+New-Item -ItemType SymbolicLink -Path "$HOME\.claude\skills\supervisor" -Target "$PWD\.claude\skills\supervisor"
+New-Item -ItemType SymbolicLink -Path "$HOME\.claude\skills\explorer"   -Target "$PWD\.claude\skills\explorer"
+New-Item -ItemType SymbolicLink -Path "$HOME\.claude\skills\reviewer"   -Target "$PWD\.claude\skills\reviewer"
+```
+
+If your user directory already contains a skill named `supervisor` from
+another project, rename the symlink target (e.g.
+`~/.claude/skills/ae-supervisor`) and update the `name:` frontmatter in the
+SKILL.md to match; the directory name becomes the slash command.
+
+### 4. Verify
+
+Open any repo in Claude Code and type `/s` — you should see `/supervisor`
+in the completion list. If not, tell Claude:
+
+> "The `/supervisor` skill is not registering from `~/.claude/skills/`.
+>  Diagnose."
+
+See [`docs/skills.md`](docs/skills.md) for the full registration guide.
+
+---
+
+## Quickstart — what to tell Claude
+
+Two paths: run the bundled example to see the loop work end-to-end, or
+point Claude at your own project.
+
+### A. See it work — run the example
+
+Inside the `agent-evolve` repo, tell Claude:
+
+> "Run `examples/demo_run.py` and show me the result."
+
+Or directly:
+
+```bash
+uv run python examples/demo_run.py
+```
+
+This plays the supervisor / explorer / reviewer roles manually against a
+toy Fibonacci optimisation target — four hardcoded candidate variants flow
+through the real eval runner, scope enforcer, equivalence checker,
+reviewer, and visualiser. It produces `examples/demo-report.html` — open it
+to see the interactive evolution tree.
+
+See [`docs/examples.md`](docs/examples.md) for a step-by-step walkthrough
+of what the demo run shows, what each candidate demonstrates, and how to
+modify the example to target your own function.
+
+### B. Use it on your own project
+
+Assuming install steps 1–4 above are done:
+
+**Step 1 — write a manifest in your target repo.** Either edit by hand or
+ask Claude:
+
+> "Create an `agent-evolve.yaml` in this repo for optimising
+>  `src/pricing/calculator.py`. Metrics: `duration_ms` minimize and
+>  `test_pass_rate` maximize with `minimum: 1.0`. Eval command:
+>  `pytest tests/pricing/`."
+
+Claude writes the manifest using [`examples/agent-evolve.yaml`](examples/agent-evolve.yaml)
+as a template. See the "What the skills are good at" section below for
+manifest shapes for different use cases.
+
+**Step 2 — start the evolution.** Slash-command form:
+
+```
+/supervisor agent-evolve.yaml
+```
+
+Natural-language form — Claude matches this to the supervisor skill's
+`description` automatically:
 
 > "Run the evolutionary search on `src/pricing/calculator.py`. Honour the
->  manifest at `my-project/agent-evolve.yaml`."
+>  manifest at `agent-evolve.yaml`."
 
-Claude then reads [`.claude/skills/supervisor/SKILL.md`](.claude/skills/supervisor/SKILL.md)
+Claude reads [`.claude/skills/supervisor/SKILL.md`](.claude/skills/supervisor/SKILL.md)
 and drives the loop — spawning `/explorer` subagents for each candidate
 slot (in parallel via the `Agent` tool), running eval + scope + equivalence
 on every candidate, invoking `/reviewer` for each scored candidate, and
 regenerating the Mermaid + HTML evolution graph after every round.
 
-### 5. Review the final PR
-
-Claude leaves the winning PR open against `main`. Read the evolution graph,
-the reviewer verdict, and the diff, then merge manually. Claude will not
-merge — that invariant is enforced by the Python layer, not by policy.
+**Step 3 — review the final PR.** Claude leaves the winning PR open
+against `main`. Read the evolution graph, the reviewer verdict, and the
+diff, then merge manually. Claude will not merge — that invariant is
+enforced by the Python layer, not by policy.
 
 > "Summarise the evolution run for me. What did each operator try, and why
 >  did the winner beat its parents?"
@@ -365,27 +448,10 @@ The same data renders as an interactive D3 tree in
 [`examples/evolve-report.html`](examples/evolve-report.html) with click-through
 inspectors, a timeline view, and PNG export.
 
-### Exercising the pipeline without Claude
+### The bundled example
 
-For CI, debugging, or a sanity check before wiring an agent runner:
-
-> "Run `examples/demo_run.py` and show me the result."
-
-Claude runs the demo — or you can run it yourself:
-
-```bash
-uv run python examples/demo_run.py
-```
-
-[`examples/demo_run.py`](examples/demo_run.py) plays the three agent roles
-manually against hardcoded `fib(n)` variants (naive recursive → memoised →
-buggy forward-loop → correct iterative). Everything except the LLM
-reasoning is real — the actual eval runner, scope enforcer, equivalence
-checker, reviewer logic, visualiser, and `LocalBackend` all run end-to-end.
-
-Expected output (four candidates across three rounds; the buggy one is
-rejected when the equivalence checker finds `fib(0)` returning `1` instead
-of `0`):
+Reference output from `examples/demo_run.py` (see Quickstart path A above
+and [`docs/examples.md`](docs/examples.md) for the full walkthrough):
 
 ```
   #1  R1 explore    2598.02µs   REQUEST_CHANGES
@@ -394,8 +460,10 @@ of `0`):
   #4  R3 crossover     0.58µs   APPROVE
 ```
 
-The demo also writes [`examples/demo-report.html`](examples/demo-report.html)
-— the D3 report for this exact run.
+The buggy candidate is rejected when the equivalence checker finds
+`fib(0)` returning `1` instead of `0`. The demo writes
+[`examples/demo-report.html`](examples/demo-report.html) — the D3 report
+for this exact run.
 
 ## CLI utilities
 
@@ -458,6 +526,7 @@ src/agent_evolve/
     reviewer/SKILL.md
 docs/
     skills.md                   ← registration + invocation guide
+    examples.md                 ← walkthrough of the bundled demo + how to modify it
 examples/
     agent-evolve.yaml
     evolve-graph.mmd            ← sample Mermaid output
