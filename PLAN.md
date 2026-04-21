@@ -48,7 +48,7 @@ agent-evolve/
 ├── agent-evolve.yaml              ← example per-module config
 │
 ├── .claude/skills/                ← SKILL.md prompt files (the "brain")
-│   ├── supervisor/SKILL.md        ← orchestrates rounds
+│   ├── evolve/SKILL.md            ← /evolve entry point (supervisor role)
 │   ├── explorer/SKILL.md          ← generates candidate solutions
 │   └── reviewer/SKILL.md          ← reviews and approves/rejects candidates
 │
@@ -89,7 +89,7 @@ reasoning prompts.
 Reference: [`gh-evolve`'s SKILL.md approach](https://github.com/kaiwong-sapiens/gh-evolve) is the
 canonical example of this pattern. Read it before writing these.
 
-**`.claude/skills/supervisor/SKILL.md`** — tells the supervisor agent how to:
+**`.claude/skills/evolve/SKILL.md`** — tells the supervisor agent how to:
 - Read the current leaderboard and Trait Matrix
 - Decide which operator to apply this round (mutate / crossover / explore)
 - Dispatch tasks to explorer agents
@@ -447,7 +447,7 @@ Build in this sequence. Each phase is usable before the next begins.
 ### Phase 2 — Skill files
 - [ ] Write `.claude/skills/explorer/SKILL.md` (reference [`gh-evolve` SKILL.md](https://github.com/kaiwong-sapiens/gh-evolve) for format and protocol)
 - [ ] Write `.claude/skills/reviewer/SKILL.md`
-- [ ] Write `.claude/skills/supervisor/SKILL.md` (include branching protocol: create `evolve/` branches, never commit to `main`)
+- [ ] Write `.claude/skills/evolve/SKILL.md` (include branching protocol: create `evolve/` branches, never commit to `main`)
 - [ ] Test: manually run a single round using the local backend and the explorer skill
 
 ### Phase 3 — Eval + Equivalence

@@ -3,7 +3,7 @@
 > **This repo is a skills bundle you install once and use across any number
 > of other projects.** It is not a project you evolve in place. The three
 > skills under `.claude/skills/` are meant to live at user scope
-> (`~/.claude/skills/`) so the `/supervisor`, `/explorer`, `/reviewer`
+> (`~/.claude/skills/`) so the `/evolve`, `/explorer`, `/reviewer`
 > commands are available in every repo you open with Claude Code.
 >
 > **Read this as instructions you give to Claude, not as commands you run
@@ -26,7 +26,7 @@ equivalence checking, and an interactive D3.js evolution graph.
 
 - **Claude drives everything.** The three `SKILL.md` files under
   `.claude/skills/` define the protocol; Claude Code auto-discovers them
-  and exposes them as `/supervisor`, `/explorer`, `/reviewer`. You tell
+  and exposes them as `/evolve`, `/explorer`, `/reviewer`. You tell
   Claude to optimise something; Claude runs the loop.
 - **Platform-agnostic backend.** Local filesystem, GitHub (Issues + PRs),
   GitLab (Issues + MRs). A single abstract `EvolveBackend` interface; the
@@ -49,71 +49,32 @@ equivalence checking, and an interactive D3.js evolution graph.
 
 ## Install (once per machine)
 
-agent-evolve is a skills bundle + supporting Python package. Install both
-once; after that every repo you open with Claude Code has `/supervisor`,
-`/explorer`, `/reviewer` available.
-
-### 1. Clone this repo
-
 ```bash
 git clone https://github.com/kyleyhw/agent-evolve.git
 cd agent-evolve
+uv run python install.py
 ```
 
-### 2. Install the Python package
+[`install.py`](install.py) installs the `agent-evolve` Python package as a
+`uv` tool (exposing the `agent-evolve` CLI) and symlinks every skill under
+`.claude/skills/` into `~/.claude/skills/` so `/evolve`, `/explorer`, and
+`/reviewer` are available in every repo you open with Claude Code.
 
-Tell Claude:
+Or ask Claude:
 
-> "Install agent-evolve as a uv tool from the current directory."
+> "Install agent-evolve."
 
-Or directly:
+Claude will run the installer. Requires Python 3.12+ and
+[uv](https://docs.astral.sh/uv/). On Windows, symlinking requires Developer
+Mode or an elevated shell — the installer falls back to a full copy if
+symlinking fails. Re-run with `--force` to overwrite existing skill links.
 
-```bash
-uv tool install --from . agent-evolve
-```
+### Verify
 
-This exposes the `agent-evolve` CLI (manifest validator + report renderer)
-and makes the `agent_evolve` Python package importable from any venv.
-Requires Python 3.12+.
+Open any repo in Claude Code and type `/e` — you should see `/evolve` in
+the completion list. If not, ask Claude:
 
-### 3. Install the skills at user scope
-
-Tell Claude:
-
-> "Install the agent-evolve skills globally. Symlink each directory under
->  `.claude/skills/` into `~/.claude/skills/` so `/supervisor`, `/explorer`,
->  and `/reviewer` work from every repo."
-
-Or directly — Linux / macOS / WSL:
-
-```bash
-mkdir -p ~/.claude/skills
-ln -s "$(pwd)/.claude/skills/supervisor" ~/.claude/skills/supervisor
-ln -s "$(pwd)/.claude/skills/explorer"   ~/.claude/skills/explorer
-ln -s "$(pwd)/.claude/skills/reviewer"   ~/.claude/skills/reviewer
-```
-
-Windows (PowerShell, elevated):
-
-```powershell
-New-Item -ItemType Directory -Force -Path "$HOME\.claude\skills" | Out-Null
-New-Item -ItemType SymbolicLink -Path "$HOME\.claude\skills\supervisor" -Target "$PWD\.claude\skills\supervisor"
-New-Item -ItemType SymbolicLink -Path "$HOME\.claude\skills\explorer"   -Target "$PWD\.claude\skills\explorer"
-New-Item -ItemType SymbolicLink -Path "$HOME\.claude\skills\reviewer"   -Target "$PWD\.claude\skills\reviewer"
-```
-
-If your user directory already contains a skill named `supervisor` from
-another project, rename the symlink target (e.g.
-`~/.claude/skills/ae-supervisor`) and update the `name:` frontmatter in the
-SKILL.md to match; the directory name becomes the slash command.
-
-### 4. Verify
-
-Open any repo in Claude Code and type `/s` — you should see `/supervisor`
-in the completion list. If not, tell Claude:
-
-> "The `/supervisor` skill is not registering from `~/.claude/skills/`.
->  Diagnose."
+> "`/evolve` is not registering from `~/.claude/skills/`. Diagnose."
 
 See [`docs/skills.md`](docs/skills.md) for the full registration guide.
 
@@ -148,42 +109,36 @@ modify the example to target your own function.
 
 ### B. Use it on your own project
 
-Assuming install steps 1–4 above are done:
+Open your target repo in Claude Code (with agent-evolve installed per the
+steps above) and just say what you want:
 
-**Step 1 — write a manifest in your target repo.** Either edit by hand or
-ask Claude:
+> "Evolve `src/pricing/calculator.py` for runtime. Keep the pricing tests
+>  green."
 
-> "Create an `agent-evolve.yaml` in this repo for optimising
->  `src/pricing/calculator.py`. Metrics: `duration_ms` minimize and
->  `test_pass_rate` maximize with `minimum: 1.0`. Eval command:
->  `pytest tests/pricing/`."
+Claude matches this to `/evolve` automatically (or you can type it
+directly). The skill then infers the spec — mode, metrics, eval command,
+scope — from your prose. It asks only about the gaps it can't guess
+(typically just the eval command if your repo doesn't use `pytest`).
+**No YAML required for one-off runs.**
 
-Claude writes the manifest using [`examples/agent-evolve.yaml`](examples/agent-evolve.yaml)
-as a template. See the "What the skills are good at" section below for
-manifest shapes for different use cases.
+Claude spawns `/explorer` subagents for each candidate slot (in parallel
+via the `Agent` tool), runs eval + scope + equivalence on every candidate,
+invokes `/reviewer` for each scored candidate, and regenerates the Mermaid
++ HTML evolution graph after every round. It leaves the winning PR open
+against `main` for you to review and merge — it will not merge itself.
 
-**Step 2 — start the evolution.** Slash-command form:
+**For reproducibility (CI, repeated runs, fine tuning):** write the spec
+to `agent-evolve.yaml` and invoke `/evolve agent-evolve.yaml`. Claude can
+do this for you:
 
-```
-/supervisor agent-evolve.yaml
-```
+> "Save the spec you just inferred as `agent-evolve.yaml` so I can
+>  re-run it in CI."
 
-Natural-language form — Claude matches this to the supervisor skill's
-`description` automatically:
+Or copy [`examples/agent-evolve.yaml`](examples/agent-evolve.yaml) as a
+template and edit in place. The "What the skills are good at" section
+below shows manifest shapes for several use cases.
 
-> "Run the evolutionary search on `src/pricing/calculator.py`. Honour the
->  manifest at `agent-evolve.yaml`."
-
-Claude reads [`.claude/skills/supervisor/SKILL.md`](.claude/skills/supervisor/SKILL.md)
-and drives the loop — spawning `/explorer` subagents for each candidate
-slot (in parallel via the `Agent` tool), running eval + scope + equivalence
-on every candidate, invoking `/reviewer` for each scored candidate, and
-regenerating the Mermaid + HTML evolution graph after every round.
-
-**Step 3 — review the final PR.** Claude leaves the winning PR open
-against `main`. Read the evolution graph, the reviewer verdict, and the
-diff, then merge manually. Claude will not merge — that invariant is
-enforced by the Python layer, not by policy.
+**After the run:**
 
 > "Summarise the evolution run for me. What did each operator try, and why
 >  did the winner beat its parents?"
@@ -334,7 +289,7 @@ demo script) is scaffolding so Claude has something concrete to call.
 
 | Skill | Slash command | What Claude does when invoked |
 |---|---|---|
-| `supervisor` | `/supervisor <manifest>` | Reads the manifest, drives rounds, picks operators, gates with reviewer, opens the final PR. Never merges. |
+| `evolve` | `/evolve [manifest \| natural language]` | Entry point. Infers a spec from prose or loads `agent-evolve.yaml`. Drives rounds, picks operators, gates with reviewer, opens the final PR. Never merges. Plays the supervisor role. |
 | `explorer` | `/explorer <candidate-id> <operator> <parents>` | Produces one candidate — writes hypothesis, codes inside scope, commits to `evolve/<problem>/candidate-<n>`. |
 | `reviewer` | `/reviewer <candidate-id>` | APPROVE / REQUEST_CHANGES / REJECT with an itemised checklist. |
 
@@ -345,6 +300,10 @@ drive them from a custom agent runner, the frontmatter reference, and how
 to fork the skills for a different optimisation target.
 
 ## Example manifest
+
+**The YAML is optional.** For one-off runs, just tell Claude what you
+want — `/evolve` infers the spec from natural language. Use a manifest
+when you want reproducibility (CI, repeated runs) or fine-grained tuning.
 
 A minimal `agent-evolve.yaml` lives alongside the code you want to evolve:
 
@@ -373,7 +332,7 @@ schema with every option documented.
 
 ```mermaid
 flowchart TD
-    S["<b>Supervisor</b><br/><i>.claude/skills/supervisor/SKILL.md</i><br/>orchestrates rounds · picks operators<br/>prunes · regenerates graph · finalizes"]
+    S["<b>/evolve (supervisor role)</b><br/><i>.claude/skills/evolve/SKILL.md</i><br/>orchestrates rounds · picks operators<br/>prunes · regenerates graph · finalizes"]
     E["<b>Explorer</b><br/><i>.claude/skills/explorer/SKILL.md</i><br/>one per candidate slot<br/>writes hypothesis · codes inside scope"]
     R["<b>Eval Runner</b><br/>runs <code>eval_command</code><br/>parses JSON / KEY=VALUE metrics"]
     Q["<b>Equivalence</b><br/>property-based tests via <code>hypothesis</code><br/>runtime mode only"]
@@ -513,6 +472,7 @@ pipeline.
 ## Project structure
 
 ```
+install.py                      ← one-shot installer
 src/agent_evolve/
     backends/     base.py  local.py  github.py  gitlab.py
     eval/         runner.py  equivalence.py
@@ -521,7 +481,7 @@ src/agent_evolve/
     viz/          graph.py  mermaid.py  html_report.py
     models.py     config.py  cli.py
 .claude/skills/                 ← auto-discovered by Claude Code
-    supervisor/SKILL.md
+    evolve/SKILL.md             ← the /evolve entry point (supervisor role)
     explorer/SKILL.md
     reviewer/SKILL.md
 docs/
