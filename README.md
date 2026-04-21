@@ -1,25 +1,34 @@
 # agent-evolve
 
-Platform-agnostic evolutionary optimization for codebases. AI agents cooperate
-to iteratively explore and evolve better solutions to a defined problem —
-improving correctness, runtime, or clarity — under strict human-approval gates.
+> **Read this as instructions you give to Claude, not as commands you run
+> yourself.** agent-evolve is an AI-driven tool — Claude is the one that
+> runs the supervisor / explorer / reviewer skills, calls the Python
+> tooling, opens branches, and produces the final PR. You, the human, drive
+> it by telling Claude what to optimise and then reviewing the PR Claude
+> leaves open for you.
 
-Inspired by [`gh-evolve`](https://github.com/kaiwong-sapiens/gh-evolve), extended
-with a platform-agnostic backend, module-scoped runs, supervisor + reviewer
-orchestration, a runtime-optimization mode with property-based equivalence
-checking, and an interactive D3.js evolution graph.
+An evolutionary search system for codebases using cooperating language-model
+agents on isolated git branches. Written with the goal of producing
+performance, correctness, or clarity improvements surfaced as pull requests
+for human approval.
+
+Inspired by [`gh-evolve`](https://github.com/kaiwong-sapiens/gh-evolve),
+extended with a platform-agnostic backend, module-scoped runs, supervisor +
+reviewer orchestration, a runtime-optimization mode with property-based
+equivalence checking, and an interactive D3.js evolution graph.
 
 ## Highlights
 
+- **Claude drives everything.** The three `SKILL.md` files under
+  `.claude/skills/` define the protocol; Claude Code auto-discovers them
+  and exposes them as `/supervisor`, `/explorer`, `/reviewer`. You tell
+  Claude to optimise something; Claude runs the loop.
 - **Platform-agnostic backend.** Local filesystem, GitHub (Issues + PRs),
   GitLab (Issues + MRs). A single abstract `EvolveBackend` interface; the
   supervisor doesn't know or care which one it is talking to.
 - **Module-scoped runs.** Each evolution targets a specific file or directory;
   the scope enforcer rejects any candidate whose diff strays outside
   `target_files` or touches `do_not_touch`.
-- **Supervisor + explorer + reviewer agents.** Three `SKILL.md` files define
-  the protocol. The reviewer is the last gate: APPROVE / REQUEST_CHANGES /
-  REJECT with an itemised checklist.
 - **Runtime mode with logic equivalence.** Property-based testing via
   `hypothesis` — hundreds of random inputs through both the original and the
   optimised function; no claimed speedup is accepted without proof of
@@ -27,175 +36,230 @@ checking, and an interactive D3.js evolution graph.
 - **Human approval gate.** Agents are architecturally forbidden from merging.
   `agents_can_merge` is `False` on the abstract base class; `__init_subclass__`
   raises `TypeError` if a subclass tries to override it. The final PR is
-  opened against `main` but **left open**.
+  opened against `main` but **left open** — Claude never merges, by
+  construction.
 - **Visual evolution graph.** Mermaid diagrams embedded in Issues for native
   GitHub rendering, plus a standalone interactive D3.js HTML report with
   lineage and timeline views.
 
-## Install
+## Quickstart — what to tell Claude
 
-```bash
-uv sync --extra dev
+### 1. Open the repo in Claude Code
+
+No install step for the skills — Claude Code auto-discovers every
+`SKILL.md` under `.claude/skills/`. Confirm with:
+
+```
+/supervisor   <Tab>
 ```
 
-Requires Python 3.12+.
+If `/supervisor`, `/explorer`, `/reviewer` are not offered, tell Claude:
 
-## Quickstart
+> "The skills under `.claude/skills/` are not showing up as slash commands.
+>  Diagnose and fix."
 
-A 60-second walkthrough using the local backend — no GitHub token needed.
+### 2. Install the Python dependencies
 
-### 1. Drop a manifest next to the code you want to evolve
+Tell Claude:
 
-```bash
-cp examples/agent-evolve.yaml my-project/agent-evolve.yaml
-# edit target_files, metrics, and eval_command for your codebase
+> "Install the project dependencies with uv."
+
+Claude runs `uv sync --extra dev`. (Requires Python 3.12+.)
+
+### 3. Write the manifest
+
+Either edit `examples/agent-evolve.yaml` by hand, or delegate:
+
+> "Create an `agent-evolve.yaml` for optimising `src/pricing/calculator.py`.
+>  Metrics: `duration_ms` minimize and `test_pass_rate` maximize with
+>  `minimum: 1.0`. Eval command: `pytest tests/pricing/`."
+
+Claude will write the manifest using the example as a template.
+
+### 4. Tell Claude to start the evolution
+
+Slash-command form:
+
+```
+/supervisor my-project/agent-evolve.yaml
 ```
 
-### 2. Validate the manifest
+Natural-language form — Claude will choose `/supervisor` from the skill's
+`description`:
 
-```bash
-uv run agent-evolve validate my-project/agent-evolve.yaml
-# ok — 'Optimise the order pricing calculator' (runtime mode, backend=local)
+> "Run the evolutionary search on `src/pricing/calculator.py`. Honour the
+>  manifest at `my-project/agent-evolve.yaml`."
+
+Claude then reads [`.claude/skills/supervisor/SKILL.md`](.claude/skills/supervisor/SKILL.md)
+and drives the loop — spawning `/explorer` subagents for each candidate
+slot (in parallel via the `Agent` tool), running eval + scope + equivalence
+on every candidate, invoking `/reviewer` for each scored candidate, and
+regenerating the Mermaid + HTML evolution graph after every round.
+
+### 5. Review the final PR
+
+Claude leaves the winning PR open against `main`. Read the evolution graph,
+the reviewer verdict, and the diff, then merge manually. Claude will not
+merge — that invariant is enforced by the Python layer, not by policy.
+
+> "Summarise the evolution run for me. What did each operator try, and why
+>  did the winner beat its parents?"
+
+is a reasonable follow-up to ask Claude before you hit merge.
+
+## What the skills are good at
+
+Four concrete things Claude can do with the three skills. Each is just a
+different shape of manifest — the same supervisor / explorer / reviewer
+machinery drives all of them.
+
+### 1. Runtime optimization — "make this faster without changing behaviour"
+
+When you need a function to be fast and the current behaviour is
+authoritative. Claude explores memoisation, vectorisation, smarter data
+structures, algorithmic rewrites — and the equivalence checker rejects any
+candidate that disagrees with the baseline on 500 random inputs.
+
+> "Optimise `src/pricing/calculator.py` for runtime. Treat the current
+>  behaviour as authoritative — any candidate that fails the equivalence
+>  check at 500 samples is rejected."
+
+```yaml
+problem:
+  mode: runtime
+  eval_command: "pytest tests/pricing/ --benchmark-json=out.json"
+  metrics:
+    - {name: duration_ms,     optimise: minimize}
+    - {name: test_pass_rate,  optimise: maximize, minimum: 1.0}
+runtime_mode:
+  equivalence_check: required
+  property_test_samples: 500
 ```
 
-### 3. Drive a run from Python
+This is the shape of [`examples/demo_run.py`](examples/demo_run.py) — see
+the naive-recursive → memoised → iterative Fibonacci walkthrough further
+down.
 
-The supervisor agent normally drives this via tool calls, but everything is
-plain Python — you can orchestrate a run yourself:
+### 2. Statistical / metric optimization — "maximize Sharpe, minimize drawdown"
 
-```python
-from agent_evolve.config import load_manifest
-from agent_evolve.backends import LocalBackend
-from agent_evolve.models import Candidate, ReviewerVerdict
-from agent_evolve.scope import enforce_scope
-from agent_evolve.eval import run_eval
-from agent_evolve.viz import build_graph, render_mermaid, render_html
+When behaviour *should* change and the goal is a better number. Trading
+strategies, hyperparameter search, heuristic tuning, any scenario where
+"the right answer" is defined by a benchmark and not by a reference
+implementation.
 
-spec = load_manifest("my-project/agent-evolve.yaml")
-backend = LocalBackend(spec, root="evolve-state")
-problem_id = backend.create_problem(spec)
+> "Evolve `src/strategies/momentum.py` to maximize Sharpe ratio and
+>  minimize max drawdown on the 2020-2024 backtest. Keep win rate above
+>  40% as a hard constraint. Don't touch `src/strategies/risk.py`."
 
-# Round 1 — baseline
-candidate = Candidate(
-    problem_id=problem_id, candidate_id="1",
-    operator="explore", round=1,
-    hypothesis="Baseline implementation.",
-)
-backend.submit_candidate(candidate)
-
-# Before scoring, check scope
-diff = ["src/pricing/calculator.py"]
-report = enforce_scope(diff, spec.scope)
-assert report.in_scope, report.violations
-
-# Run the eval command and record metrics
-result = run_eval(spec.eval_command)
-backend.score_candidate("1", result.metrics)
-
-# Reviewer verdict (structured — one per candidate)
-backend.record_verdict("1", ReviewerVerdict(
-    verdict="APPROVE",
-    reason="Meets hard constraints, no scope violations.",
-    checklist={"scope_compliant": True, "metrics_improved": True},
-    confidence="high",
-))
-
-# Regenerate the graph + HTML report after each round
-graph = build_graph(backend.get_leaderboard(), problem_id=problem_id)
-backend.update_graph(render_mermaid(graph), "evolve-report.html")
-render_html(graph, "evolve-report.html")
-
-# When a round-based winner emerges, finalize — opens a "PR" (never merges)
-pr_path = backend.finalize("1")
-print(f"Final PR descriptor at: {pr_path}")
+```yaml
+problem:
+  mode: algorithm                 # equivalence check disabled by default
+  eval_command: "python scripts/backtest.py --years 2020-2024"
+  metrics:
+    - {name: sharpe,        optimise: maximize}
+    - {name: max_drawdown,  optimise: minimize}
+    - {name: win_rate,      optimise: maximize, minimum: 0.4}
+evolution:
+  operators: [mutate, crossover, explore]
+  prune_strategy: pareto          # Pareto-front across the three metrics
 ```
 
-### 4. Open the report
+This is the canonical [`gh-evolve`](https://github.com/kaiwong-sapiens/gh-evolve)
+use case and what the Pareto pruning strategy was built for.
 
-```bash
-# Open the interactive search tree in your browser
-start evolve-report.html      # Windows
-xdg-open evolve-report.html   # Linux
-open evolve-report.html       # macOS
+### 3. Algorithm correctness — "make the failing tests pass"
+
+When a test suite is red and you want Claude to iterate until it's green.
+The reviewer checklist's hard constraint (`test_pass_rate minimum: 1.0`)
+rejects any candidate that doesn't hit 100%.
+
+> "`src/graphs/dijkstra.py` is failing three tests in `tests/graphs/`. Run
+>  the evolutionary loop with `test_pass_rate` as the only metric
+>  (minimum 1.0). Don't modify tests or anything outside `src/graphs/`."
+
+```yaml
+problem:
+  mode: algorithm
+  eval_command: "pytest tests/graphs/ --tb=short"
+  metrics:
+    - {name: test_pass_rate, optimise: maximize, minimum: 1.0}
+scope:
+  target_files: [src/graphs/]
+  do_not_touch: [tests/]          # can't pass tests by deleting them
+evolution:
+  rounds: 8                       # more rounds — correctness search is wider
+  candidates_per_round: 3
 ```
 
-Click any node to inspect its hypothesis, conclusion, metrics, and
-reviewer verdict. Toggle **Timeline** to see the tree laid out by round;
-**Export PNG** for a static copy.
+The `do_not_touch: [tests/]` line is the critical one — it prevents the
+scope enforcer from accepting the classic "I fixed the tests by deleting
+the assertions" failure mode.
+
+### 4. Clarity refactor — "keep the behaviour, cut the complexity"
+
+When the code works but is unreadable. Runtime mode preserves behaviour;
+the metric is some complexity measure. Claude mutates toward simpler
+control flow, shorter functions, fewer nested conditionals — and the
+equivalence check stops it from "simplifying" by breaking behaviour.
+
+> "Refactor `src/billing/invoice_processor.py` for readability. Treat the
+>  current behaviour as authoritative. Optimise for cyclomatic complexity
+>  via radon, and keep all existing tests passing."
+
+```yaml
+problem:
+  mode: runtime
+  eval_command: "pytest tests/billing/ && radon cc src/billing/invoice_processor.py -a --json"
+  metrics:
+    - {name: average_complexity, optimise: minimize}
+    - {name: test_pass_rate,     optimise: maximize, minimum: 1.0}
+runtime_mode:
+  equivalence_check: required
+```
+
+This one reads a complexity number out of `radon` — any eval command that
+emits numeric metrics on stdout (JSON object or `KEY=VALUE` lines) works.
+
+---
+
+These four are not a fixed menu — they are just different manifests. You
+describe the problem to Claude; Claude writes (or asks you to confirm) a
+manifest in one of these shapes, then drives the loop.
 
 ## Using the GitHub backend
 
-Switch the manifest's `backend.type` to `github` and set `backend.repo`:
+Tell Claude to switch:
 
-```yaml
-backend:
-  type: github
-  repo: kyleyhw/my-project
-```
+> "Change the manifest's `backend.type` to `github` with `repo:
+>  kyleyhw/my-project`, and set `GH_TOKEN` from my `.env`."
 
-Set a token with `repo` scope:
+Claude will update the YAML and confirm the token is readable. With the
+GitHub backend selected, `create_problem()` opens an evolutionary Issue and
+installs a branch protection rule on `main`; candidates become draft PRs
+with an `EVOLVE_STATE` JSON block embedded in their bodies; `finalize()`
+opens a non-draft PR from the winner's branch against `main` and **stops**
+— a human reviewer merges.
 
-```bash
-export GH_TOKEN=ghp_xxxxxxxxxxxxxxxx
-```
+The token needs `repo` scope. You can supply it via `GH_TOKEN` or
+`GITHUB_TOKEN` in the environment, or pass it to `GitHubBackend(..., github_token=...)`
+explicitly if Claude is constructing the backend directly.
 
-Then use `GitHubBackend` in place of `LocalBackend`:
+## The three skills
 
-```python
-from agent_evolve.backends import GitHubBackend
-backend = GitHubBackend(spec)
-```
+The skills are the canonical drivers — everything else (Python, CLI, the
+demo script) is scaffolding so Claude has something concrete to call.
 
-`create_problem()` opens an Issue and installs a branch protection rule on
-`main`. Candidates become draft PRs with an `EVOLVE_STATE` JSON block embedded
-in their bodies. The supervisor's `finalize()` opens a non-draft PR from the
-winner's branch against `main` and **stops** — a human reviewer merges.
+| Skill | Slash command | What Claude does when invoked |
+|---|---|---|
+| `supervisor` | `/supervisor <manifest>` | Reads the manifest, drives rounds, picks operators, gates with reviewer, opens the final PR. Never merges. |
+| `explorer` | `/explorer <candidate-id> <operator> <parents>` | Produces one candidate — writes hypothesis, codes inside scope, commits to `evolve/<problem>/candidate-<n>`. |
+| `reviewer` | `/reviewer <candidate-id>` | APPROVE / REQUEST_CHANGES / REJECT with an itemised checklist. |
 
-## Using the supervisor / explorer / reviewer skills
-
-The three skills in `.claude/skills/*/SKILL.md` are the canonical drivers.
-They are plain Markdown files with YAML frontmatter — any agent runner that
-speaks the Claude-Code skills convention picks them up automatically.
-
-### Registration (Claude Code)
-
-Claude Code discovers skills by directory layout alone — no configuration
-required. The repo already has the right shape:
-
-```
-agent-evolve/
-└── .claude/
-    └── skills/
-        ├── supervisor/SKILL.md   →  /supervisor
-        ├── explorer/SKILL.md     →  /explorer
-        └── reviewer/SKILL.md     →  /reviewer
-```
-
-When Claude Code is started inside the repo, the three skills become
-available as slash commands. Claude can also auto-invoke them when the
-conversation matches the skill's `description` / `when_to_use` frontmatter.
-
-To make the skills available globally (any project), symlink or copy the
-directories under `~/.claude/skills/` instead.
-
-### Typical orchestration
-
-1. User runs `/supervisor examples/agent-evolve.yaml` (or any manifest path).
-2. The supervisor reads the Trait Matrix, chooses operators for the round,
-   and spawns one explorer per slot — either by invoking `/explorer` in turn
-   or by calling the `Agent` tool for parallel subagent execution.
-3. Each explorer produces a candidate on branch `evolve/<problem>/candidate-<n>`.
-4. The supervisor runs the eval + equivalence pipeline, then calls `/reviewer`
-   for each scored candidate and records the verdict via `backend.record_verdict`.
-5. After the final round, the supervisor calls `backend.finalize(winner)` and
-   reports the PR URL. A human merges.
-
-See [`docs/skills.md`](docs/skills.md) for the full invocation guide — custom
-runners, frontmatter reference, and how to swap the skills for your own.
-
-The skills only ever touch the backend through its public interface, so you
-can swap `LocalBackend` for `GitHubBackend` or `GitLabBackend` without
-changing any prompts.
+All three are plain Markdown with YAML frontmatter. See
+[`docs/skills.md`](docs/skills.md) for the full guide — how Claude Code
+discovers them, how to make them available globally, how to tell Claude to
+drive them from a custom agent runner, the frontmatter reference, and how
+to fork the skills for a different optimisation target.
 
 ## Example manifest
 
@@ -301,16 +365,23 @@ The same data renders as an interactive D3 tree in
 [`examples/evolve-report.html`](examples/evolve-report.html) with click-through
 inspectors, a timeline view, and PNG export.
 
-### End-to-end demo
+### Exercising the pipeline without Claude
 
-[`examples/demo_run.py`](examples/demo_run.py) drives the full pipeline
-without agents — hardcoded candidate variants of `fib(n)` (naive recursive →
-memoised → buggy forward-loop → correct iterative) flow through the real
-eval runner, scope enforcer, equivalence checker, reviewer, and visualiser.
+For CI, debugging, or a sanity check before wiring an agent runner:
+
+> "Run `examples/demo_run.py` and show me the result."
+
+Claude runs the demo — or you can run it yourself:
 
 ```bash
 uv run python examples/demo_run.py
 ```
+
+[`examples/demo_run.py`](examples/demo_run.py) plays the three agent roles
+manually against hardcoded `fib(n)` variants (naive recursive → memoised →
+buggy forward-loop → correct iterative). Everything except the LLM
+reasoning is real — the actual eval runner, scope enforcer, equivalence
+checker, reviewer logic, visualiser, and `LocalBackend` all run end-to-end.
 
 Expected output (four candidates across three rounds; the buggy one is
 rejected when the equivalence checker finds `fib(0)` returning `1` instead
@@ -326,7 +397,10 @@ of `0`):
 The demo also writes [`examples/demo-report.html`](examples/demo-report.html)
 — the D3 report for this exact run.
 
-## CLI
+## CLI utilities
+
+Two small utilities for humans who want to inspect state directly, or that
+Claude invokes when asked to validate / report:
 
 ```bash
 # Validate a manifest
@@ -352,6 +426,12 @@ The GitHub backend additionally installs a branch protection rule on the
 protected branch during `create_problem()`.
 
 ## Running the tests
+
+Tell Claude:
+
+> "Run the test suite."
+
+Or directly:
 
 ```bash
 uv run pytest -q
