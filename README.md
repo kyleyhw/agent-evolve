@@ -325,8 +325,20 @@ backend:
   repo: your-org/your-repo
 ```
 
-See [`examples/agent-evolve.yaml`](examples/agent-evolve.yaml) for the full
-schema with every option documented.
+**Full field reference:** [`docs/manifest.md`](docs/manifest.md) — covers
+every option (`mode: algorithm | runtime`, `prune_strategy: pareto | top_k`,
+`equivalence_check: required | optional | disabled`, etc.), how metric
+`name`s flow from your eval command's stdout (JSON or `KEY=VALUE`), scope
+glob patterns, and common manifest shapes for runtime / correctness /
+statistical / refactor runs.
+
+The fully-commented example is in
+[`examples/agent-evolve.yaml`](examples/agent-evolve.yaml).
+
+Ask Claude to edit your manifest in plain English:
+
+> "Add `src/pricing/v2/` to the target files and bump
+>  `property_test_samples` to 2000."
 
 ## How it works
 
@@ -487,6 +499,7 @@ src/agent_evolve/
 docs/
     skills.md                   ← registration + invocation guide
     examples.md                 ← walkthrough of the bundled demo + how to modify it
+    manifest.md                 ← field-by-field agent-evolve.yaml reference
 examples/
     agent-evolve.yaml
     evolve-graph.mmd            ← sample Mermaid output
