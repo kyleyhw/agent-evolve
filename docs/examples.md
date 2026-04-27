@@ -29,28 +29,41 @@ modify it to target a different function.
     fib.py     ← candidate implementation (overwritten per round)
 ```
 
-Then it runs four candidates across three rounds. Each "explorer" is
+Then it runs six candidates across three rounds. Each "explorer" is
 replaced by a hardcoded Python source string — we are not calling Claude
 here, we are driving the real Python pipeline with predetermined
 candidates so the run is deterministic, fast (~3 seconds), and offline.
 
-The four variants are:
+The six candidates are deliberately chosen to walk through every gate
+the real loop applies — equivalence (return-value), equivalence
+(exception-type), scope, and the Pareto pruning step:
 
 | Variant | Round | Operator | What it is |
 |---|---|---|---|
 | `baseline` | 1 | explore | Naive `O(2^n)` recursive Fibonacci — reference implementation. |
 | `memoised` | 2 | mutate | Baseline + `@lru_cache(maxsize=None)` — trades memory for no recomputation. |
-| `buggy_loop` | 2 | mutate | Forward loop with an off-by-one (`range(n-1)` instead of `range(n)`). |
+| `buggy_loop` | 2 | mutate | Forward loop with an off-by-one (`range(n-1)` instead of `range(n)`). Demonstrates **return-value equivalence rejection**. |
+| `raises_on_small` | 3 | explore | O(n) loop with an explicit `raise ValueError` for `n<2`. Demonstrates **exception-divergence rejection** — the baseline returns `n` for those cases instead of raising. |
+| *scope-violator* | 3 | mutate | Iterative implementation, but the explorer also "touched" `bench.py` (which is in `do_not_touch`). Demonstrates **scope rejection before review**. |
 | `iterative` | 3 | crossover | Correct forward iteration; conceptually combines memoised's "never recompute" with buggy_loop's "no recursion". |
+
+The spec also carries a multi-model dispatch hint
+(`agents=AgentsSpec(reviewer="gemini")`) — the demo plays the reviewer
+role in-process with its stand-in, but logs `reviewer dispatch: gemini`
+per candidate so the printed run shows what a real loop would have done
+once external-agent dispatch is wired up.
 
 For each candidate the demo:
 
 1. Writes the variant's source into `fib.py`
-2. Calls `scope.enforce_scope(["fib.py"], spec.scope)` — confirms the
-   change stays within `target_files`
+2. Calls `scope.enforce_scope(touches, spec.scope)` — where `touches`
+   is the per-candidate file list. **If the result is out of scope,
+   the candidate is pruned immediately and the loop continues** —
+   no eval, no equivalence check, no reviewer dispatch.
 3. Runs `eval.run_eval(spec.eval_command, cwd=<tempdir>)` — a subprocess
    that imports `fib`, warms it up, times 100 calls of `fib(22)`, and
-   prints a JSON metrics line
+   prints a JSON metrics line containing `duration_us`, `test_pass_rate`,
+   and `code_lines` (the second soft-metric introduced in this revision)
 4. Calls `equivalence.check_equivalence(baseline_fn, variant_fn,
    tuples(integers(0..20)), samples=40)` — runs the `hypothesis`
    property-based equivalence checker
@@ -59,7 +72,7 @@ For each candidate the demo:
    emits APPROVE / REQUEST_CHANGES / REJECT per a hardcoded checklist
 7. Calls `backend.record_verdict(id, verdict)`
 
-After all four candidates, the supervisor role:
+After all six candidates, the supervisor role:
 
 8. Calls `viz.build_graph` + `viz.render_mermaid` + `viz.render_html`
 9. Picks the winner (fastest APPROVE) and prunes the rest
@@ -71,37 +84,59 @@ After all four candidates, the supervisor role:
 
 ```
 [demo] workdir: C:\Users\...\Temp\agent-evolve-demo-xxxxxxxx
+[demo] agents:  supervisor=claude  explorer=claude  reviewer=gemini
 
 [demo] round 1 · candidate 1 (explore → baseline)
-[demo]   metrics:    {'duration_us': 2598.02, 'test_pass_rate': 1.0}
+[demo]   reviewer dispatch: gemini (demo stand-in invoked)
+[demo]   metrics:    {'duration_us': 3177.67, 'test_pass_rate': 1.0, 'code_lines': 4.0}
 [demo]   equivalent: True
 [demo]   verdict:    REQUEST_CHANGES — Equivalent to baseline but no meaningful speedup.
 
 [demo] round 2 · candidate 2 (mutate → memoised)
-[demo]   metrics:    {'duration_us': 0.1, 'test_pass_rate': 1.0}
+[demo]   reviewer dispatch: gemini (demo stand-in invoked)
+[demo]   metrics:    {'duration_us': 0.35, 'test_pass_rate': 1.0, 'code_lines': 6.0}
 [demo]   equivalent: True
-[demo]   verdict:    APPROVE — 0.1µs vs baseline 2598.0µs.
+[demo]   verdict:    APPROVE — 0.3µs vs baseline 3177.7µs.
 
 [demo] round 2 · candidate 3 (mutate → buggy_loop)
-[demo]   metrics:    {'duration_us': 0.56, 'test_pass_rate': 0.0}
+[demo]   reviewer dispatch: gemini (demo stand-in invoked)
+[demo]   metrics:    {'duration_us': 0.9, 'test_pass_rate': 0.0, 'code_lines': 5.0}
 [demo]   equivalent: False (counterexample (0,))
+[demo]   mismatch:   return value differs: original=0 optimized=1
 [demo]   verdict:    REJECT — Not logic-equivalent to baseline — return value differs: original=0 optimized=1
 
-[demo] round 3 · candidate 4 (crossover → iterative)
-[demo]   metrics:    {'duration_us': 0.58, 'test_pass_rate': 1.0}
+[demo] round 3 · candidate 4 (explore → raises_on_small)
+[demo]   reviewer dispatch: gemini (demo stand-in invoked)
+[demo]   metrics:    {'duration_us': -1.0, 'test_pass_rate': 0.0, 'code_lines': 10.0}
+[demo]   equivalent: False (counterexample (0,))
+[demo]   mismatch:   divergent exception behaviour — original=None optimized=ValueError('n must be >= 2')
+[demo]   verdict:    REJECT — Not logic-equivalent to baseline — divergent exception behaviour — original=None optimized=ValueError('n must be >= 2')
+
+[demo] round 3 · candidate 5 (mutate → iterative)
+[demo]   touches:    ['fib.py', 'bench.py']
+[demo]   PRUNED (pre-review): 'bench.py' is in do_not_touch
+
+[demo] round 3 · candidate 6 (crossover → iterative)
+[demo]   reviewer dispatch: gemini (demo stand-in invoked)
+[demo]   metrics:    {'duration_us': 0.93, 'test_pass_rate': 1.0, 'code_lines': 5.0}
 [demo]   equivalent: True
-[demo]   verdict:    APPROVE — 0.6µs vs baseline 2598.0µs.
+[demo]   verdict:    APPROVE — 0.9µs vs baseline 3177.7µs.
 
 --- Leaderboard ---
-  #1  R1 explore    2598.02µs   REQUEST_CHANGES
-  #2  R2 mutate        0.10µs   APPROVE
-  #3  R2 mutate        0.57µs   REJECT
-  #4  R3 crossover     0.58µs   APPROVE
+  #1  R1 explore     3177.67µs    4L   REQUEST_CHANGES
+  #2  R2 mutate         0.35µs    6L   APPROVE
+  #3  R2 mutate         0.90µs    5L   REJECT
+  #4  R3 explore       -1.00µs   10L   REJECT
+  #5  R3 mutate         0.00µs    0L   PRUNED
+  #6  R3 crossover      0.93µs    5L   APPROVE
 
-[demo] winner:          #2 (mutate, 0.1µs)
+[demo] winner:          #2 (mutate, 0.3µs, 6L)
 [demo] final PR file:   <tempdir>\evolve-state\1\final_pr.json
 [demo] HTML report:     <repo>\examples\demo-report.html
 ```
+
+Exact timings depend on the host machine; the *relative* ordering and
+the verdict per candidate are what should match.
 
 ### What each candidate demonstrates
 
@@ -112,29 +147,47 @@ it seeds the Trait Matrix and gives the supervisor something to mutate in
 round 2.
 
 **#2 memoised — APPROVE, winner.** Adding `@lru_cache` turns `fib(n)`
-from `O(2^n)` to `O(n)` with ~25,000× measured speedup. The equivalence
-checker confirms outputs match on 40 random `n ∈ [0, 20]` inputs. **But
-watch out** — the benchmark calls `fib(22)` 100 times *in a loop without
-resetting the cache*, so iterations 2–100 are free cache hits. The
-reported 0.1 µs is "amortised over 100 calls assuming a persistent cache",
-not "cost of a fresh lookup". A benchmark that resets state between calls
-would give a fairer picture; this is a deliberate demonstration of how
-a micro-benchmark can reward an implementation for the wrong reason.
+from `O(2^n)` to `O(n)` with multi-thousand-fold measured speedup. The
+equivalence checker confirms outputs match on 40 random `n ∈ [0, 20]`
+inputs. **Watch out** — the benchmark calls `fib(22)` 100 times *in a
+loop without resetting the cache*, so iterations 2–100 are free cache
+hits. The reported sub-microsecond timing is "amortised over 100 calls
+assuming a persistent cache", not "cost of a fresh lookup". A benchmark
+that resets state between calls would give a fairer picture; this is a
+deliberate demonstration of how a micro-benchmark can reward an
+implementation for the wrong reason.
 
-**#3 buggy_loop — REJECT.** Off-by-one: `for _ in range(n - 1)` iterates
-one fewer step than it should, so `fib(0)` returns `1` instead of `0`.
-The test suite catches it (`test_pass_rate` drops to 0.0), *and* the
-equivalence checker independently catches it — the counterexample
-`(0,)` is reported in the verdict. Two independent rejection paths; the
-reviewer rejects on either. This is the core safety story: candidates
-cannot pass by getting lucky on the test suite alone.
+**#3 buggy_loop — REJECT (return-value divergence).** Off-by-one:
+`for _ in range(n - 1)` iterates one fewer step than it should, so
+`fib(0)` returns `1` instead of `0`. The test suite catches it
+(`test_pass_rate` drops to 0.0), *and* the equivalence checker
+independently catches it — the counterexample `(0,)` is reported in the
+verdict. Two independent rejection paths.
 
-**#4 iterative — APPROVE, not winner.** Correct `O(n)` forward loop with
-no cache. Equivalent to baseline. In the hardcoded benchmark it's slightly
-slower than #2 on paper (0.58 µs vs 0.10 µs), so the winner-selector
-picks #2. Honest caveat — in a realistic workload with cache resets, #4
-would likely beat #2, because the persistent cache is a quirk of the
-benchmark, not of the implementation.
+**#4 raises_on_small — REJECT (exception-type divergence).** A plausible
+"clean" rewrite that raises `ValueError` for `n<2` instead of returning
+`n`. The benchmark crashes on `fib(0)` (so `test_pass_rate` is 0 and
+`duration_us` comes back as the sentinel `-1`), but more importantly the
+equivalence checker reports `divergent exception behaviour` — the
+baseline returns a value where this candidate raises. This is the
+rejection path the reviewer's `equivalence_passed` check exists for, and
+it is independent of whether the test suite happens to exercise the
+problematic input.
+
+**#5 scope-violator — PRUNED before review.** Same iterative code as #6,
+but the explorer also wrote to `bench.py`. The scope enforcer's
+`do_not_touch` list catches this *before* eval, equivalence, or reviewer
+dispatch — the candidate is pruned with `'bench.py' is in do_not_touch`
+as the reason. This demonstrates the cost-saving short-circuit: a
+violating candidate never burns eval time.
+
+**#6 iterative — APPROVE, not winner.** Correct `O(n)` forward loop with
+no cache. Equivalent to baseline, slightly slower than #2 on paper
+because the cached fast path beats the un-cached one in this synthetic
+benchmark. **However** #6 has fewer source lines (5 vs 6 for the
+memoised version), so on the `code_lines` axis it dominates #2 — a real
+Pareto trade-off. The demo's tie-break picks #2 by `duration_us` first;
+swap the lexicographic order in `main()` and the winner flips to #6.
 
 ### Artifacts
 
@@ -195,14 +248,19 @@ Open [`examples/demo-report.html`](../examples/demo-report.html) after
 running the demo. You should see:
 
 - A grey pruned node for #1 (baseline, REQUEST_CHANGES → demoted)
-- A blue APPROVE node for #2 sized up as the green WINNER
-- A red REJECT node for #3 (the buggy loop)
-- A blue APPROVE node for #4 connected to both #2 and #3 as parents
+- A green WINNER node for #2 (memoised, APPROVE)
+- A red REJECT node for #3 (buggy_loop, return-value divergence)
+- A red REJECT node for #4 (raises_on_small, exception-type divergence)
+- A grey pruned node for #5 (scope violator) with no metrics
+- A blue APPROVE node for #6 connected to both #2 and #3 as parents
   (crossover edge)
 
-Click #3 — the right panel shows the equivalence counterexample
-`counterexample: {"args": ["0"], "kwargs": {}}` — proof that `fib(0)`
-triggered the rejection.
+Click #3 — the right panel shows
+`counterexample: {"args": ["0"], "kwargs": {}}` and the mismatch text
+`return value differs: original=0 optimized=1` — proof that `fib(0)`
+triggered the rejection. Click #4 and the same panel shows the *exception*
+mismatch: `divergent exception behaviour — original=None optimized=ValueError(...)`,
+making the two rejection categories visibly distinct.
 
 ---
 
@@ -256,18 +314,26 @@ Make sure your benchmark emits a matching key in its JSON output.
 
 ### Change the plan
 
-The `PLAN` list defines round/operator/variant pairings. Add more rounds
-or more candidates per round:
+The `PLAN` list defines round/operator/variant pairings, plus the file
+list each candidate "touched" — used by the scope enforcer to short-
+circuit pruning before eval. Add more rounds or more candidates per
+round:
 
 ```python
 PLAN = [
-    ("1", "explore",   [],         1, "baseline",       "Reference."),
-    ("2", "mutate",    ["1"],      2, "candidate_a",    "Try idea A."),
-    ("3", "mutate",    ["1"],      2, "candidate_b",    "Try idea B."),
-    ("4", "crossover", ["2", "3"], 3, "candidate_c",    "Combine A and B."),
-    ("5", "explore",   [],         3, "candidate_d",    "Different paradigm."),
+    # (cid, operator, parents, round, variant, touches, hypothesis)
+    ("1", "explore",   [],         1, "baseline",     ["fib.py"],            "Reference."),
+    ("2", "mutate",    ["1"],      2, "candidate_a",  ["fib.py"],            "Try idea A."),
+    ("3", "mutate",    ["1"],      2, "candidate_b",  ["fib.py"],            "Try idea B."),
+    ("4", "crossover", ["2", "3"], 3, "candidate_c",  ["fib.py"],            "Combine A and B."),
+    ("5", "explore",   [],         3, "candidate_d",  ["fib.py", "bench.py"], "Different paradigm — also touches bench (scope violation)."),
 ]
 ```
+
+To exercise the scope-rejection path in a forked demo, list any file
+that appears in `spec.scope.do_not_touch` in the candidate's `touches`
+field; the demo will prune that candidate without running eval or the
+reviewer.
 
 Tune `EvolutionSpec(rounds=..., candidates_per_round=...)` in
 `_build_spec` to match.

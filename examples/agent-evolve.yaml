@@ -50,3 +50,17 @@ backend:
   type: local                           # local | github | gitlab
   repo: kyleyhw/agent-evolve            # used by github / gitlab backends
   root_dir: evolve-state                # used by local backend
+
+# Optional. Per-role agent assignment. Default for every role is "claude"
+# (the in-session model — Opus 4.7 / latest in Claude Code). Any other
+# value is a bare agent name; the supervisor SKILL resolves it to a CLI
+# (e.g. "gemini" -> `gemini -p ...`, "codex" -> `codex exec ...`).
+# Supervisor is informational — it must stay in-session in this version.
+#
+# `explorer` also accepts a list — an "ensemble" — and the supervisor
+# distributes the round's candidate slots round-robin across the list.
+# With candidates_per_round=3 and explorer=[claude, gemini], slots 1/2/3
+# go to claude/gemini/claude. Reviewer accepts a single agent only.
+# agents:
+#   reviewer: gemini
+#   explorer: [claude, gemini]

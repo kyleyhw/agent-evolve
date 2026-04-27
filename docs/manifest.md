@@ -449,6 +449,59 @@ backend:
 
 ---
 
+## `agents`
+
+Optional. Per-role agent assignment. Every role defaults to `"claude"` —
+the in-session Claude Code model (Opus 4.7 / latest), dispatched via the
+`Agent` subagent tool. Any other value is a bare agent name (e.g.
+`gemini`, `codex`); the supervisor SKILL — not Python — resolves it to a
+concrete CLI invocation, builds the role's prompt from the role's
+`SKILL.md`, runs it via `Bash`, and parses the structured output.
+
+```yaml
+agents:
+  reviewer: gemini                  # use Gemini CLI for the reviewer role
+  explorer: [claude, gemini]        # ensemble — slots round-robin'd across both
+  # supervisor: claude              # informational — supervisor stays in-session
+```
+
+| Field | Type | Default | Notes |
+|---|---|---|---|
+| `agents.supervisor` | string | `"claude"` | Informational. The supervisor *is* the running Claude Code session; this version cannot swap it. To run the whole loop under another model, you need a headless CLI runner (not yet implemented). |
+| `agents.explorer` | string **or** list of strings | `"claude"` | A single name uses one model for every slot. A **list** is an *ensemble* — the supervisor distributes the round's `candidates_per_round` slots round-robin across the list, mixing exploration heuristics from multiple models inside a single round. Each non-`"claude"` name in the list must resolve to an agentic CLI (`gemini`, `codex`, ...) capable of editing files and committing on a branch. |
+| `agents.reviewer` | string | `"claude"` | The simplest role to swap — text in, structured verdict out. Any LLM CLI that takes a prompt and returns text on stdout works, provided it can be coaxed into the `VERDICT/REASON/CHECKLIST/CONFIDENCE` block. |
+
+### Explorer ensemble worked example
+
+With `candidates_per_round: 3` and `explorer: [claude, gemini]`, slots
+1, 2, 3 are dispatched to `claude`, `gemini`, `claude` respectively.
+Round 2 starts the cycle over: slots 1, 2, 3 → `claude`, `gemini`,
+`claude` again. The `claude` slots are batched into a single parallel
+`Agent` subagent invocation; the `gemini` slots run sequentially via
+`Bash` to the Gemini CLI.
+
+The supervisor SKILL handles parse failures by re-invoking the CLI once
+with a "respond in this exact format" reminder; if the second attempt
+still fails, the candidate is treated as REJECTed (reviewer) or marked
+failed (explorer) and the loop continues. A flaky external agent
+degrades gracefully rather than corrupting the run.
+
+### When to use this
+
+- **Reviewer swap** — cheapest and safest first step. Lets you cross-check
+  Claude's verdicts against a different model's judgement, or use a
+  cheaper model for the high-volume reviewer role.
+- **Explorer swap (single agent)** — useful when you want a different
+  family's exploration biases for a specific run.
+- **Explorer ensemble** — useful for *covering* the search space.
+  Different model families bias toward different refactors; round-robin
+  dispatch across an ensemble surfaces candidates that none of the
+  models would have proposed alone.
+- **Supervisor swap** — not yet supported in-session; on the roadmap as
+  a separate `agent-evolve run` headless CLI.
+
+---
+
 ## `version`
 
 Optional. Currently only `version: 1` is recognised. The parser ignores
@@ -629,6 +682,21 @@ want and reword.
 > "Change to the GitLab backend pointing at `myorg/myrepo` on the
 >  self-hosted instance at `https://gitlab.internal`. Set `GITLAB_URL`
 >  accordingly."
+
+#### `agents`
+
+> "Use Gemini for the reviewer role this run; keep Claude for everything
+>  else."
+
+> "Set `agents.explorer` to `codex` so the explorer slots are filled by
+>  the Codex CLI."
+
+> "Make `agents.explorer` an ensemble of Claude and Gemini — distribute
+>  the explorer slots round-robin between them so each round mixes their
+>  exploration heuristics."
+
+> "Reset all roles back to Claude — drop the `agents:` block from the
+>  manifest."
 
 ### Compound edits
 

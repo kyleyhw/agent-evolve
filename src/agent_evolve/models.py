@@ -95,6 +95,47 @@ class BackendSpec:
 
 
 @dataclass(frozen=True)
+class AgentsSpec:
+    """Which agent fills each role in the loop.
+
+    Each field is a bare agent name (``"claude"``, ``"gemini"``, ``"codex"``,
+    ...) or — for the ``explorer`` role — a *list* of names that forms an
+    **ensemble**. The supervisor SKILL — not Python — resolves names to
+    concrete CLI invocations, builds the right prompt, and parses
+    structured output. The default ``"claude"`` runs the role in-session
+    (the current Claude Code session, currently Opus 4.7) via the ``Agent``
+    subagent tool; any other value is treated as an external CLI.
+
+    Ensemble semantics (``explorer`` only)
+    --------------------------------------
+    When ``explorer`` is a list like ``["claude", "gemini"]``, the
+    supervisor distributes the round's ``candidates_per_round`` slots
+    round-robin across the list. With three slots and the example list
+    above, slots 1, 2, 3 are dispatched to ``claude``, ``gemini``,
+    ``claude`` — mixing exploration heuristics from different model
+    families within a single round.
+
+    The ``supervisor`` field is informational — the supervisor is whatever
+    Claude Code session loaded the spec, so swapping it requires a
+    headless runner (out of scope for this version).
+    """
+
+    supervisor: str = "claude"
+    explorer: str | list[str] = "claude"
+    reviewer: str = "claude"
+
+    def explorer_list(self) -> list[str]:
+        """Always-list view of ``explorer`` — collapses the ``str | list`` union.
+
+        The supervisor SKILL uses this to round-robin slot assignments
+        without having to special-case the singleton form.
+        """
+        if isinstance(self.explorer, str):
+            return [self.explorer]
+        return list(self.explorer)
+
+
+@dataclass(frozen=True)
 class ProblemSpec:
     """The full manifest loaded from ``agent-evolve.yaml``."""
 
@@ -107,6 +148,7 @@ class ProblemSpec:
     runtime_mode: RuntimeModeSpec
     safety: SafetySpec
     backend: BackendSpec
+    agents: AgentsSpec = field(default_factory=AgentsSpec)
     version: int = 1
 
 
