@@ -61,7 +61,15 @@ def install_python_package() -> int:
 
 
 def install_skills(*, force: bool) -> int:
-    """Symlink every skill directory into the user-scope skills folder."""
+    """Symlink every skill directory into the user-scope skills folder.
+
+    Re-installation contract: an existing destination is auto-refreshed
+    when its ``SKILL.md`` frontmatter ``name:`` matches the source's —
+    i.e. a prior copy of the *same* skill from a previous install.
+    A foreign skill occupying the same slot (different ``name:``) still
+    requires ``--force`` to overwrite, preserving the original collision
+    guard for users with unrelated skills.
+    """
     USER_SKILLS.mkdir(parents=True, exist_ok=True)
 
     skills = sorted(p for p in SKILLS_SRC.iterdir() if p.is_dir())
@@ -77,13 +85,16 @@ def install_skills(*, force: bool) -> int:
             print(f"[install]   {src.name}: already linked — skipping")
             continue
         if dst.exists() or dst.is_symlink():
-            if not force:
+            same_skill = _is_same_skill(src, dst)
+            if not force and not same_skill:
                 print(
-                    f"[install]   {src.name}: {dst} exists and points elsewhere; "
-                    "re-run with --force to overwrite"
+                    f"[install]   {src.name}: {dst} exists and is a different skill "
+                    f"({_skill_name_from(dst) or '?'}); re-run with --force to overwrite"
                 )
                 errors += 1
                 continue
+            if same_skill and not force:
+                print(f"[install]   {src.name}: refreshing existing copy in place")
             _remove(dst)
 
         if _make_symlink(src, dst):
@@ -93,13 +104,56 @@ def install_skills(*, force: bool) -> int:
                 shutil.copytree(src, dst)
                 print(
                     f"[install]   {src.name}: symlink failed; copied -> {dst} "
-                    "(edits to SKILL.md in the repo will not propagate)"
+                    "(re-run install.py to refresh the copy after editing SKILL.md)"
                 )
             except OSError as e:
                 print(f"[install]   {src.name}: copy failed — {e}", file=sys.stderr)
                 errors += 1
 
     return 0 if errors == 0 else 2
+
+
+def _skill_name_from(skill_dir: Path) -> str | None:
+    """Read the YAML frontmatter ``name:`` from ``<skill_dir>/SKILL.md``.
+
+    Returns ``None`` if the file is missing, lacks frontmatter, or does
+    not declare a ``name`` field. The frontmatter is delimited by lines
+    of three dashes; we scan until the closing fence rather than
+    full-parsing YAML to avoid pulling in a dependency for one field.
+    """
+    md = skill_dir / "SKILL.md"
+    if not md.exists():
+        return None
+    try:
+        text = md.read_text(encoding="utf-8", errors="replace")
+    except OSError:
+        return None
+    lines = text.splitlines()
+    if not lines or lines[0].strip() != "---":
+        return None
+    for line in lines[1:]:
+        if line.strip() == "---":
+            return None
+        if ":" in line:
+            key, _, value = line.partition(":")
+            if key.strip().lower() == "name":
+                return value.strip()
+    return None
+
+
+def _is_same_skill(src: Path, dst: Path) -> bool:
+    """True if ``src`` and ``dst`` declare the same SKILL ``name:``.
+
+    A symlinked destination is treated as not-same (the symlink case is
+    handled separately by ``_already_points_here``); we are only
+    interested in the case where the destination is a stale *copy* from
+    a previous install.
+    """
+    if dst.is_symlink():
+        return False
+    src_name = _skill_name_from(src)
+    dst_name = _skill_name_from(dst)
+    return src_name is not None and src_name == dst_name
 
 
 def _already_points_here(dst: Path, src: Path) -> bool:
