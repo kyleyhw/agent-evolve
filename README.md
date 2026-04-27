@@ -49,25 +49,35 @@ equivalence checking, and an interactive D3.js evolution graph.
 
 ## Install (once per machine)
 
+Open Claude Code in any repo and tell Claude:
+
+> "Install agent-evolve from https://github.com/kyleyhw/agent-evolve"
+
+Claude clones the repo into a sensible location, runs
+[`install.py`](install.py), and verifies the three skills are registered.
+After this, `/evolve`, `/explorer`, and `/reviewer` are available in
+every repo you open with Claude Code.
+
+Requires Python 3.12+ and [uv](https://docs.astral.sh/uv/). On Windows,
+symlinking requires Developer Mode or an elevated shell — the installer
+falls back to a full copy if symlinking fails. Re-run the prompt with
+"force overwrite" if you need to refresh existing skill links.
+
+<details>
+<summary>Manual install (alternative)</summary>
+
 ```bash
 git clone https://github.com/kyleyhw/agent-evolve.git
 cd agent-evolve
 uv run python install.py
 ```
 
-[`install.py`](install.py) installs the `agent-evolve` Python package as a
-`uv` tool (exposing the `agent-evolve` CLI) and symlinks every skill under
-`.claude/skills/` into `~/.claude/skills/` so `/evolve`, `/explorer`, and
-`/reviewer` are available in every repo you open with Claude Code.
+`install.py` installs the `agent-evolve` Python package as a `uv` tool
+(exposing the `agent-evolve` CLI) and symlinks every skill under
+`.claude/skills/` into `~/.claude/skills/`. Re-run with `--force` to
+overwrite existing skill links.
 
-Or ask Claude:
-
-> "Install agent-evolve."
-
-Claude will run the installer. Requires Python 3.12+ and
-[uv](https://docs.astral.sh/uv/). On Windows, symlinking requires Developer
-Mode or an elevated shell — the installer falls back to a full copy if
-symlinking fails. Re-run with `--force` to overwrite existing skill links.
+</details>
 
 ### Verify
 
@@ -120,6 +130,43 @@ directly). The skill then infers the spec — mode, metrics, eval command,
 scope — from your prose. It asks only about the gaps it can't guess
 (typically just the eval command if your repo doesn't use `pytest`).
 **No YAML required for one-off runs.**
+
+### Multi-model exploration (Opus + Gemini)
+
+Every role defaults to Claude (Opus 4.7), but the explorer slot can be
+filled by other agent CLIs — currently Claude (Opus) and Gemini are the
+supported pair. Two natural shapes:
+
+**Single non-default agent.** Use one model for the entire explorer or
+reviewer role:
+
+> "Evolve `src/pricing/calculator.py` for runtime. Use Gemini as the
+>  reviewer. Keep the pricing tests green."
+
+**Ensemble across both.** Distribute the explorer slots round-robin
+across an ensemble — slot 1 → Claude, slot 2 → Gemini, slot 3 → Claude,
+and so on, mixing exploration heuristics from both model families inside
+each round:
+
+> "Evolve `src/pricing/calculator.py` for runtime. Use Gemini for some
+>  exploration agents alongside Claude. Keep the pricing tests green."
+
+Claude reads the second prompt as `agents.explorer: [claude, gemini]`
+and round-robin's the slots; reviewer stays Claude. The corresponding
+manifest fragment, if you write it directly:
+
+```yaml
+agents:
+  explorer: [claude, gemini]   # ensemble
+  reviewer: claude             # default; explicit here for clarity
+```
+
+Gemini-CLI must be on `PATH` for slots dispatched to Gemini to succeed.
+The supervisor falls back to a re-prompt-and-retry once on malformed
+output and otherwise marks that slot's candidate failed without
+poisoning the run — so a missing or flaky Gemini install degrades
+gracefully to a Claude-only run. Full reference at
+[`docs/manifest.md`](docs/manifest.md#agents).
 
 Claude spawns `/explorer` subagents for each candidate slot (in parallel
 via the `Agent` tool), runs eval + scope + equivalence on every candidate,
@@ -384,14 +431,22 @@ Reference output from `examples/demo_run.py` (see Quickstart path A above
 and [`docs/examples.md`](docs/examples.md) for the full walkthrough):
 
 ```
-  #1  R1 explore    2598.02µs   REQUEST_CHANGES
-  #2  R2 mutate        0.10µs   APPROVE          ← winner
-  #3  R2 mutate        0.56µs   REJECT           (non-equivalent)
-  #4  R3 crossover     0.58µs   APPROVE
+  #1  R1 explore     3177.67µs    4L   REQUEST_CHANGES
+  #2  R2 mutate         0.35µs    6L   APPROVE          ← winner
+  #3  R2 mutate         0.90µs    5L   REJECT           (return-value divergence)
+  #4  R3 explore       -1.00µs   10L   REJECT           (exception-type divergence)
+  #5  R3 mutate         0.00µs    0L   PRUNED           (scope violation, pre-review)
+  #6  R3 crossover      0.93µs    5L   APPROVE
 ```
 
-The buggy candidate is rejected when the equivalence checker finds
-`fib(0)` returning `1` instead of `0`. The demo writes
+The six candidates walk through every gate the real loop applies —
+return-value equivalence (#3), exception-type equivalence (#4), scope
+enforcement (#5, pruned without ever running eval or the reviewer), and
+the Pareto trade-off between `duration_us` and `code_lines` that lets
+both #2 (faster, 6 lines) and #6 (slightly slower, 5 lines) survive
+pruning. The spec also carries an `agents=AgentsSpec(reviewer="gemini")`
+hint, so the printed run logs `reviewer dispatch: gemini` per candidate
+to show what a multi-model run would have done. The demo writes
 [`examples/demo-report.html`](examples/demo-report.html) — the D3 report
 for this exact run.
 

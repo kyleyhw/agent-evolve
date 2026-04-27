@@ -30,23 +30,26 @@ debugging and individual-step testing.
 
 ### One-shot install (recommended)
 
-From the agent-evolve repo root:
+Open Claude Code in any repo and tell Claude:
+
+> "Install agent-evolve from https://github.com/kyleyhw/agent-evolve"
+
+Claude clones the repo into a sensible location and runs `install.py`,
+which symlinks every skill directory into `~/.claude/skills/` (falling
+back to a copy on Windows without admin rights) and installs the Python
+package as a `uv` tool. After that, `/evolve`, `/explorer`, and
+`/reviewer` are available in any repo you open with Claude Code.
+
+If you already have the repo cloned, the equivalent manual command from
+its root is:
 
 ```bash
 uv run python install.py
 ```
 
-This symlinks every skill directory into `~/.claude/skills/` (falling back
-to a copy on Windows without admin rights) and installs the Python package
-as a `uv` tool. After that, `/evolve`, `/explorer`, and `/reviewer` are
-available in any repo you open with Claude Code.
-
-Or ask Claude:
-
-> "Install agent-evolve."
-
-Claude runs `install.py`. Re-run with `--force` to overwrite an existing
-skill directory under `~/.claude/skills/`.
+Re-run the prompt with "force overwrite" (or pass `--force` to the manual
+command) to overwrite an existing skill directory under
+`~/.claude/skills/`.
 
 ### Per-project only (no user-scope install)
 
