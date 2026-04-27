@@ -267,6 +267,18 @@ def _spec_to_dict(spec: ProblemSpec) -> dict[str, Any]:
             "repo": spec.backend.repo,
             "root_dir": spec.backend.root_dir,
         },
+        "agents": {
+            "supervisor": spec.agents.supervisor,
+            # ``explorer`` is ``str | list[str]``; serialise verbatim so a
+            # round-trip through YAML preserves whether the user wrote a
+            # bare name or an ensemble list.
+            "explorer": (
+                list(spec.agents.explorer)
+                if isinstance(spec.agents.explorer, list)
+                else spec.agents.explorer
+            ),
+            "reviewer": spec.agents.reviewer,
+        },
     }
 
 

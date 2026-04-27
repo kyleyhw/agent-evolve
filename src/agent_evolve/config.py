@@ -12,6 +12,7 @@ from typing import Any
 import yaml
 
 from agent_evolve.models import (
+    AgentsSpec,
     BackendSpec,
     EvolutionSpec,
     Metric,
@@ -49,6 +50,7 @@ def _parse(raw: dict[str, Any], *, source: Path) -> ProblemSpec:
     evolution = raw.get("evolution", {}) or {}
     runtime_mode = raw.get("runtime_mode", {}) or {}
     safety = raw.get("safety", {}) or {}
+    agents = raw.get("agents", {}) or {}
 
     metrics_raw = problem.get("metrics", [])
     if not metrics_raw:
@@ -89,6 +91,42 @@ def _parse(raw: dict[str, Any], *, source: Path) -> ProblemSpec:
             repo=backend.get("repo"),
             root_dir=backend.get("root_dir"),
         ),
+        agents=AgentsSpec(
+            supervisor=str(agents.get("supervisor", "claude")),
+            explorer=_parse_explorer_value(agents.get("explorer", "claude"), source=source),
+            reviewer=str(agents.get("reviewer", "claude")),
+        ),
+    )
+
+
+def _parse_explorer_value(value: Any, *, source: Path) -> str | list[str]:
+    """Accept either a single agent name or a list (ensemble).
+
+    A list with a single element is normalised back to a string so the
+    serialized form stays identical to the singleton case — no semantic
+    difference between ``explorer: claude`` and ``explorer: [claude]``.
+    Lists with two or more elements are kept as lists; the supervisor
+    SKILL distributes round slots round-robin across them.
+    """
+    if value is None:
+        return "claude"
+    if isinstance(value, str):
+        return value
+    if isinstance(value, list):
+        if not value:
+            raise ManifestError(
+                f"{source}: agents.explorer is an empty list — must be a string or a non-empty list of strings"
+            )
+        for item in value:
+            if not isinstance(item, str):
+                raise ManifestError(
+                    f"{source}: agents.explorer entries must be strings; got {type(item).__name__}"
+                )
+        if len(value) == 1:
+            return value[0]
+        return list(value)
+    raise ManifestError(
+        f"{source}: agents.explorer must be a string or list of strings; got {type(value).__name__}"
     )
 
 

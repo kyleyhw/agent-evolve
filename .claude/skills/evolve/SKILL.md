@@ -90,6 +90,82 @@ import yaml
 yaml.safe_dump(spec_to_dict(spec), Path("agent-evolve.yaml").open("w"))
 ```
 
+## External agent dispatch
+
+The manifest's optional `agents:` block names *which* agent fills each
+role. Read it from `spec.agents`:
+
+```python
+spec.agents.supervisor       # informational — you are the supervisor
+spec.agents.explorer         # str | list[str]; default "claude"
+spec.agents.explorer_list()  # always-list view — use for round-robin slot assignment
+spec.agents.reviewer         # str; default "claude"
+```
+
+The `explorer` value can be either a single agent name (the default,
+backwards-compatible case) or a **list** that forms an *ensemble*. For
+ensembles, the supervisor distributes a round's
+`candidates_per_round` slots round-robin across the list:
+
+```text
+explorer = ["claude", "gemini"], candidates_per_round = 3
+slot 1 -> claude
+slot 2 -> gemini
+slot 3 -> claude
+```
+
+This mixes exploration heuristics from different model families inside
+a single round without changing the rest of the loop. Use
+`spec.agents.explorer_list()` to get the always-list form so you do not
+have to special-case the singleton.
+
+For any individual slot whose resolved agent is `"claude"`, follow the
+in-session dispatch path — spawn an `Agent` subagent. The current Claude
+Code session model (Opus 4.7 / latest) does the work.
+
+For any individual slot whose resolved agent is **not** `"claude"`,
+dispatch via `Bash` to the named external CLI. You — not Python — are
+responsible for the interfacing. The procedure:
+
+1. **Resolve the agent name to a CLI binary.** Common names:
+   - `gemini` → `gemini` (Gemini CLI from Google)
+   - `codex` → `codex` (Codex CLI)
+   - Anything else → ask the user how to invoke it. Do not guess.
+   Confirm the binary is on PATH (`Bash("which <name>")`); if not,
+   stop and ask the user.
+2. **Build the prompt.** Read the role's SKILL.md verbatim — that is the
+   system prompt. Append a role-specific assignment block:
+   - **Explorer**: candidate id, branch name, operator, parent diff(s)
+     and EVOLVE_STATE, the full `agent-evolve.yaml`, and an explicit
+     instruction to commit the candidate to its branch and emit the
+     completed EVOLVE_STATE block as the last thing on stdout.
+   - **Reviewer**: the candidate's branch, the full diff vs. parent and
+     vs. `main`, the EVOLVE_STATE block, the eval result and metrics,
+     the equivalence report (runtime mode), and the spec. Instruct it to
+     emit *only* the `VERDICT/REASON/CHECKLIST/CONFIDENCE` block on
+     stdout — no preamble, no commentary.
+3. **Invoke via `Bash`.** Single-shot is preferable. For an agentic CLI
+   (gemini-cli, codex), pass the prompt as the argument the CLI accepts
+   and let it use its own file-edit / git tools. For a one-shot text
+   CLI (reviewer only), pipe stdin or use the CLI's prompt flag.
+4. **Validate the structured output.**
+   - Explorer: confirm the branch exists, the diff is inside scope, and
+     an EVOLVE_STATE block is present. If any is missing, retry once
+     with a stricter "your output must include the EVOLVE_STATE block"
+     reminder. If still missing, mark the candidate failed (`prune` with
+     reason `"external explorer produced unparseable output"`) and
+     continue.
+   - Reviewer: parse `VERDICT: ...`, the checklist, and the confidence.
+     If parse fails, retry once with the format reminder. If still
+     malformed, record a `REJECT` verdict with reason `"external
+     reviewer output unparseable after one retry"` and continue.
+5. **Never let an external-agent failure poison the run.** A bad
+   external agent should look like a rejected candidate, not a stopped
+   loop.
+
+The default in-session path (everything is `"claude"`) is unchanged — the
+above only kicks in when the manifest opts out for a specific role.
+
 ## Tools available
 
 Via the backend adapter (local / github / gitlab — pick based on
@@ -146,6 +222,22 @@ Spawn an explorer agent per slot — they work in parallel. Each explorer
 follows `.claude/skills/explorer/SKILL.md` (invocable as `/explorer` once
 registered, or via the `Agent` tool for parallel subagent execution).
 
+Dispatch path depends on `spec.agents.explorer`:
+
+- `"claude"` (default, single agent): use the `Agent` tool — explorers
+  run as parallel Claude subagents in this session.
+- single non-`"claude"` string: follow the **External agent dispatch**
+  procedure above for each slot. External explorers cannot trivially be
+  parallelised by the `Agent` tool, so run them sequentially via `Bash`
+  unless the external CLI itself supports concurrent invocation.
+- list (**ensemble**, e.g. `["claude", "gemini"]`): build the slot-to-
+  agent assignment with `spec.agents.explorer_list()` and round-robin —
+  slot `i` goes to `agents[i % len(agents)]`. For each slot, dispatch
+  via the appropriate path (`Agent` tool for `claude`, **External agent
+  dispatch** otherwise). Group the `claude` slots into a single
+  parallel `Agent` invocation for efficiency; run the external-CLI
+  slots sequentially alongside.
+
 ### Phase D — Collect and score
 
 For each returned candidate:
@@ -165,6 +257,14 @@ For each returned candidate:
 For every scored candidate that is not already rejected, call the reviewer
 agent (see `.claude/skills/reviewer/SKILL.md`; invocable as `/reviewer`).
 Attach the verdict with `backend.record_verdict`.
+
+Dispatch path depends on `spec.agents.reviewer`:
+
+- `"claude"` (default): invoke the reviewer SKILL in-session.
+- anything else: follow the **External agent dispatch** procedure above,
+  treating the reviewer SKILL as the system prompt and emitting the
+  `VERDICT/REASON/CHECKLIST/CONFIDENCE` block to stdout. Parse it into a
+  `ReviewerVerdict` before calling `backend.record_verdict`.
 
 ### Phase F — Prune
 

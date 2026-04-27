@@ -5,6 +5,14 @@ description: Generates a single candidate solution in an evolutionary round. Rea
 
 # Explorer agent
 
+> This file is read either by Claude in-session or passed as a system
+> prompt to another agent CLI (gemini, codex, ...) when the manifest's
+> `agents.explorer` is not `"claude"`. Your output protocol — a branch
+> commit on `evolve/<problem-id>/candidate-<id>` plus a completed
+> EVOLVE_STATE block — is the same in both cases. If you are running as a
+> non-Claude CLI agent, the EVOLVE_STATE JSON must be the last block on
+> stdout, with no trailing commentary.
+
 You are one of several explorers in a round. The supervisor has handed you:
 
 - A **parent** candidate (or two, for crossover)

@@ -95,7 +95,7 @@
 const DATA = {
   "title": "Demo \u2014 fib(n) optimisation",
   "problem_id": "1",
-  "winner_id": "c4",
+  "winner_id": "c6",
   "nodes": [
     {
       "id": "ROOT",
@@ -113,14 +113,15 @@ const DATA = {
     {
       "id": "c1",
       "kind": "candidate",
-      "label": "candidate-1\noperator: explore\nR1 | 2687ms\nstatus: rejected",
+      "label": "candidate-1\noperator: explore\nR1 | 2788ms\nstatus: rejected",
       "color": "rejected",
       "operator": "explore",
       "round": 1,
       "status": "rejected",
       "metrics": {
-        "duration_us": 2686.74,
-        "test_pass_rate": 1.0
+        "duration_us": 2788.19,
+        "test_pass_rate": 1.0,
+        "code_lines": 4.0
       },
       "hypothesis": "Reference implementation \u2014 naive recursion.",
       "conclusion": null,
@@ -136,7 +137,8 @@ const DATA = {
       "status": "approved",
       "metrics": {
         "duration_us": 0.1,
-        "test_pass_rate": 1.0
+        "test_pass_rate": 1.0,
+        "code_lines": 6.0
       },
       "hypothesis": "Add @lru_cache \u2014 trades a tiny amount of memory for never recomputing the same fib(k) twice.",
       "conclusion": null,
@@ -151,8 +153,9 @@ const DATA = {
       "round": 2,
       "status": "rejected",
       "metrics": {
-        "duration_us": 0.56,
-        "test_pass_rate": 0.0
+        "duration_us": 0.62,
+        "test_pass_rate": 0.0,
+        "code_lines": 5.0
       },
       "hypothesis": "Replace recursion with a forward loop for O(n) time.",
       "conclusion": null,
@@ -161,14 +164,45 @@ const DATA = {
     {
       "id": "c4",
       "kind": "candidate",
-      "label": "candidate-4 \u2b50\noperator: crossover\nR3 | 1ms\nstatus: WINNER",
+      "label": "candidate-4\noperator: explore\nR3 | -1ms\nstatus: rejected",
+      "color": "rejected",
+      "operator": "explore",
+      "round": 3,
+      "status": "rejected",
+      "metrics": {
+        "duration_us": -1.0,
+        "test_pass_rate": 0.0,
+        "code_lines": 10.0
+      },
+      "hypothesis": "Different attack: iterative loop with explicit precondition n>=2 to avoid the n<2 special case.",
+      "conclusion": null,
+      "verdict": "REJECT"
+    },
+    {
+      "id": "c5",
+      "kind": "candidate",
+      "label": "candidate-5\noperator: mutate\nR3\nstatus: pruned",
+      "color": "pruned",
+      "operator": "mutate",
+      "round": 3,
+      "status": "pruned",
+      "metrics": {},
+      "hypothesis": "Iterative rewrite plus a tweak to bench.py to widen the warmup loop \u2014 should make timing measurements more stable.",
+      "conclusion": "Pruned: scope violation: 'bench.py' is in do_not_touch",
+      "verdict": null
+    },
+    {
+      "id": "c6",
+      "kind": "candidate",
+      "label": "candidate-6 \u2b50\noperator: crossover\nR3 | 1ms\nstatus: WINNER",
       "color": "winner",
       "operator": "crossover",
       "round": 3,
       "status": "approved",
       "metrics": {
         "duration_us": 0.58,
-        "test_pass_rate": 1.0
+        "test_pass_rate": 1.0,
+        "code_lines": 5.0
       },
       "hypothesis": "Combine memoised's 'never recompute' insight with the forward-loop idea from #3, fixing the off-by-one.",
       "conclusion": null,
@@ -189,12 +223,20 @@ const DATA = {
       "target": "c3"
     },
     {
-      "source": "c2",
+      "source": "ROOT",
       "target": "c4"
     },
     {
+      "source": "c2",
+      "target": "c5"
+    },
+    {
+      "source": "c2",
+      "target": "c6"
+    },
+    {
       "source": "c3",
-      "target": "c4"
+      "target": "c6"
     }
   ]
 };
