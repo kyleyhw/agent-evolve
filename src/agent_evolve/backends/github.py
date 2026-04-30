@@ -187,6 +187,8 @@ class GitHubBackend(EvolveBackend):
             if other.status not in ("pruned", "rejected"):
                 self.prune(other.candidate_id, reason=f"not selected — winner is PR #{winner_id}")
 
+        self._apply_branch_cleanup(winner_id)
+
         final_body = _render_final_pr_body(winner, self._issue, self.spec)
         final = self._repo.create_pull(
             title=f"[Evolve #{self.problem_id}] winner: candidate-{winner_id} "
@@ -211,6 +213,49 @@ class GitHubBackend(EvolveBackend):
             )
 
         return final.html_url
+
+    def _apply_branch_cleanup(self, winner_id: str) -> None:
+        """Honour ``safety.branch_cleanup`` for losing candidates.
+
+        ``keep``   — historical behaviour; loser PRs stay closed and
+                     branches stay alive. No-op.
+        ``archive`` (default) — add the ``evolve-archived`` label to
+                                each loser PR so the active PR list is
+                                clean. Branches stay alive for forensic
+                                value (a week-later regression often
+                                wants the rejected diffs).
+        ``delete`` — additionally delete the branch via the GitHub API.
+                     Irreversible. The loser PR's body still renders,
+                     but ``head`` is gone — readers must rely on the
+                     EVOLVE_STATE block + the trait matrix screenshot.
+
+        Any per-PR failure is logged via an issue comment but does not
+        abort the run; partial cleanup is acceptable.
+        """
+        mode = self.spec.safety.branch_cleanup
+        if mode == "keep":
+            return
+        for c in self.get_leaderboard():
+            if c.candidate_id == winner_id:
+                continue
+            try:
+                pr = self._pr(c.candidate_id)
+            except Exception:
+                continue
+            try:
+                pr.add_to_labels("evolve-archived")
+            except Exception:
+                pass
+            if mode == "delete":
+                # Branches under refs/heads/ have a delete endpoint on
+                # the Git Data API, exposed via PyGithub as
+                # Repository.get_git_ref("heads/<name>").delete().
+                try:
+                    branch_name = c.branch or c.branch_name()
+                    ref = self._repo.get_git_ref(f"heads/{branch_name}")
+                    ref.delete()
+                except Exception:
+                    pass
 
     def _ensure_issue(self) -> None:
         if self._issue is None:
@@ -333,11 +378,18 @@ def _render_verdict_comment(verdict: ReviewerVerdict) -> str:
     checklist_lines = "\n".join(
         f"- [{'x' if v else ' '}] {k}" for k, v in verdict.checklist.items()
     )
-    return (
-        f"**VERDICT: {verdict.verdict}** (confidence: {verdict.confidence})\n\n"
-        f"{verdict.reason}\n\n"
-        f"### Checklist\n{checklist_lines}"
-    )
+    parts = [
+        f"**VERDICT: {verdict.verdict}** (confidence: {verdict.confidence})",
+        "",
+        verdict.reason,
+    ]
+    if verdict.informative:
+        # Surface ``INFORMATIVE`` between the reason and the checklist so a
+        # casual scroll past the comment still picks it up — putting it at
+        # the bottom would bury it under the per-item checks.
+        parts += ["", f"> **Note:** {verdict.informative}"]
+    parts += ["", "### Checklist", checklist_lines]
+    return "\n".join(parts)
 
 
 def _render_final_pr_body(winner: Candidate, issue: Issue | None, spec: ProblemSpec) -> str:
@@ -360,6 +412,8 @@ def _render_final_pr_body(winner: Candidate, issue: Issue | None, spec: ProblemS
             f"- **Reason:** {verdict.reason}",
             f"- **Confidence:** {verdict.confidence}",
         ]
+        if verdict.informative:
+            parts.append(f"- **Note:** {verdict.informative}")
     parts += [
         "",
         "### Trait Matrix",

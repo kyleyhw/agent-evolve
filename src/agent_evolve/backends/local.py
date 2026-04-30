@@ -131,6 +131,19 @@ class LocalBackend(EvolveBackend):
             if other.status not in ("pruned", "rejected"):
                 self.prune(other.candidate_id, reason=f"not selected — winner was {winner_id}")
 
+        # Branch cleanup applies to all non-winner candidates regardless of
+        # whether they were just-pruned or already-rejected. ``archive`` and
+        # ``delete`` are recorded in candidate state — there is no real git
+        # checkout to mutate in the local backend, so this is essentially
+        # a label change. The supervisor SKILL is responsible for the
+        # corresponding git operation when running against a real repo.
+        self._apply_branch_cleanup(winner_id)
+
+        # Bundle artifacts under <problem>/artifacts/ — a single directory
+        # the human reviewer can read or zip without hunting through the
+        # rest of the state tree.
+        artifact_dir = self._bundle_artifacts(winner_id)
+
         doc = self._read_problem_doc()
         pr_descriptor = {
             "kind": "final_pr",
@@ -144,6 +157,10 @@ class LocalBackend(EvolveBackend):
             "trait_matrix": doc.get("trait_matrix", []),
             "graph_mermaid": doc.get("graph_mermaid", ""),
             "report_html_path": doc.get("report_html_path"),
+            "artifacts_dir": str(artifact_dir.relative_to(self.root.parent))
+                if artifact_dir.is_relative_to(self.root.parent)
+                else str(artifact_dir),
+            "branch_cleanup": self.spec.safety.branch_cleanup,
             "merged": False,
         }
         pr_path = self._problem_dir(self.problem_id) / "final_pr.json"
@@ -153,6 +170,90 @@ class LocalBackend(EvolveBackend):
         doc["winner_id"] = winner_id
         self._atomic_write_json(self._problem_dir(self.problem_id) / "problem.json", doc)
         return str(pr_path)
+
+    def _apply_branch_cleanup(self, winner_id: str) -> None:
+        """Apply ``safety.branch_cleanup`` to every non-winning candidate.
+
+        ``keep`` is a no-op (preserved for parity with the historical
+        behaviour). ``archive`` rewrites the candidate's branch label so
+        it sorts under ``archive/...``; the candidate JSON is updated in
+        place but kept readable. ``delete`` rewrites the JSON to mark the
+        branch as deleted; readers should treat the candidate as
+        archive-tombstoned (the metadata stays so the trait matrix and
+        evolution graph remain renderable).
+        """
+        mode = self.spec.safety.branch_cleanup
+        if mode == "keep":
+            return
+        for c in self.get_leaderboard():
+            if c.candidate_id == winner_id:
+                continue
+            current = c.branch or c.branch_name()
+            if mode == "archive":
+                if current.startswith("archive/"):
+                    continue
+                c.branch = f"archive/{current}"
+            elif mode == "delete":
+                # Mark deleted but leave a breadcrumb. Subsequent reads
+                # find an empty branch label, which downstream graph
+                # rendering tolerates.
+                c.branch = ""
+            self._write_candidate(c)
+            self._refresh_trait_row(c)
+
+    def _bundle_artifacts(self, winner_id: str) -> Path:
+        """Consolidate run artifacts under ``<problem>/artifacts/``.
+
+        Writes a flat snapshot intended for human inspection or zipping:
+
+        * ``report.html`` — copied if a previous round wrote one.
+        * ``graph.mmd`` — copied from ``<problem>/graph.mmd``.
+        * ``trait_matrix.json`` — extracted from ``problem.json`` for
+          machine consumers that don't want to parse the whole doc.
+        * ``candidates/<id>.state.json`` — per-candidate snapshot.
+        * ``MANIFEST.txt`` — short index of what the directory contains.
+
+        Returns the directory path.
+        """
+        import shutil
+
+        problem_dir = self._problem_dir(self.problem_id)
+        artifact_dir = problem_dir / "artifacts"
+        candidates_artifacts = artifact_dir / "candidates"
+        candidates_artifacts.mkdir(parents=True, exist_ok=True)
+
+        graph_src = problem_dir / "graph.mmd"
+        if graph_src.exists():
+            shutil.copyfile(graph_src, artifact_dir / "graph.mmd")
+
+        doc = self._read_problem_doc()
+        report_path = doc.get("report_html_path")
+        if report_path:
+            report_src = Path(report_path)
+            if report_src.exists():
+                shutil.copyfile(report_src, artifact_dir / "report.html")
+
+        trait_matrix = doc.get("trait_matrix", [])
+        self._atomic_write_json(artifact_dir / "trait_matrix.json", trait_matrix)
+
+        for c in self.get_leaderboard():
+            self._atomic_write_json(
+                candidates_artifacts / f"{c.candidate_id}.state.json",
+                c.to_dict(),
+            )
+
+        manifest_lines = [
+            f"# agent-evolve artifacts for problem {self.problem_id}",
+            f"# winner: candidate-{winner_id}",
+            f"# generated: {_now_iso()}",
+            "",
+            "report.html         interactive D3 evolution tree (open in a browser)",
+            "graph.mmd           Mermaid source for the evolution graph",
+            "trait_matrix.json   structured Trait Matrix (one row per candidate)",
+            "candidates/         per-candidate EVOLVE_STATE snapshots",
+        ]
+        (artifact_dir / "MANIFEST.txt").write_text("\n".join(manifest_lines), encoding="utf-8")
+        return artifact_dir
 
     def _ensure_problem(self) -> None:
         if self.problem_id is None:
@@ -305,4 +406,6 @@ def _render_summary(winner: Candidate, doc: dict[str, Any]) -> str:
     if winner.reviewer_verdict:
         lines.append(f"- **Reason:** {winner.reviewer_verdict.reason}")
         lines.append(f"- **Confidence:** {winner.reviewer_verdict.confidence}")
+        if winner.reviewer_verdict.informative:
+            lines.append(f"- **Note:** {winner.reviewer_verdict.informative}")
     return "\n".join(lines)

@@ -124,6 +124,77 @@ The command should exit `0` on success. Non-zero is treated as a failing
 run — the supervisor records whatever metrics were emitted before the
 failure and lets the reviewer decide.
 
+### `problem.eval_cwd` (string, optional)
+
+Working directory for `eval_command`. When unset (the default), the
+supervisor runs the eval at the candidate's worktree root. Set this
+when the benchmark lives in a subdirectory and reads paths relative to
+itself:
+
+```yaml
+problem:
+  eval_command: "python bench.py"
+  eval_cwd: bench/perf/                  # bench.py reads ./fixtures/...
+```
+
+### `problem.expected_baseline` (mapping, optional)
+
+Per-metric expected baseline values. When set, the supervisor measures
+the actual baseline by running `eval_command` on
+`safety.protected_branch` before round 1, then refuses to start the
+search if any metric's measured value differs from the expected value
+by more than `problem.expected_baseline_tolerance`.
+
+```yaml
+problem:
+  eval_command: "python scripts/backtest.py --years 2020-2024"
+  expected_baseline:
+    sharpe: 1.2                          # what you think the baseline is
+    max_drawdown: -0.18
+  expected_baseline_tolerance: 0.05      # 5% — see below
+```
+
+The point of this gate is to catch eval misconfiguration before the
+search burns its budget. If the eval `cwd` is wrong, the dataset is
+missing, or the benchmark is degenerate, the measured baseline will
+disagree with `expected_baseline` and the supervisor will surface the
+discrepancy instead of optimising toward a number that does not reflect
+production behaviour.
+
+When `expected_baseline` is omitted, the gate is skipped — the
+supervisor still records the measured baseline (so the reviewer's
+`metrics_improved` check is anchored) but does not validate it.
+
+### `problem.expected_baseline_tolerance` (number, default `0.05`)
+
+Fractional tolerance applied to `expected_baseline` and to the
+`production_runner` cross-check. `0.05` means a measured value must be
+within ±5% of the expected value (using `|expected|` as the
+denominator). Set higher for noisy benchmarks, lower for tight
+precision requirements. Must be non-negative.
+
+### `problem.production_runner` (string, optional)
+
+A second eval command, run on every candidate the reviewer
+**APPROVED** (not on every slot of every round — the cost would
+dominate). Compares production-equivalent metrics to what
+`eval_command` reported.
+
+```yaml
+problem:
+  eval_command:      "pytest tests/pricing/ --quick"      # fast proxy
+  production_runner: "pytest tests/pricing/ --slow"       # full benchmark
+```
+
+| Disagreement vs. eval_command | Effect on the candidate |
+|---|---|
+| Within `expected_baseline_tolerance` | Verdict unchanged. |
+| Within `0.5 × tolerance` (i.e. half the tolerance) | Verdict unchanged but flagged via `INFORMATIVE` — surface to the human reviewer. |
+| Beyond `tolerance` | Verdict demoted from `APPROVE` to `REQUEST_CHANGES` with the eval/production drift in `REASON`. |
+
+Skipped silently when `production_runner` is unset (the reviewer's
+`eval_matches_production` checklist item is also skipped).
+
 ### `problem.metrics` (list, **required**, ≥ 1 entry)
 
 Tells the supervisor what to optimise for and what hard constraints are
@@ -148,6 +219,7 @@ Fields per entry:
 | `optimise` | `minimize` or `maximize`, required | Direction. Used for Pareto pruning + "metrics_improved" check. |
 | `minimum` | number, optional | Hard floor. Candidate is rejected if this metric falls below `minimum`. |
 | `maximum` | number, optional | Hard ceiling. Candidate is rejected if this metric exceeds `maximum`. |
+| `primary` | bool, default `false` | Marks this metric as the one used for `top_k` pruning and tie-breakers. **At most one metric** in a manifest may set `primary: true` (the parser rejects manifests with two). If none is marked, the first metric wins by fallback — preserving the prior behaviour. |
 
 **Important:** metric `name`s are matched *verbatim* against the keys in
 the eval command's output (JSON or `KEY=VALUE` lines). A typo in either
@@ -382,11 +454,30 @@ runtime. Most fields exist to document intent — the real enforcement
 happens in the Python layer (`EvolveBackend.__init_subclass__` +
 `assert_no_merge`).
 
-### `safety.protected_branch` (string, default `"main"`)
+### `safety.protected_branch` (string, default: auto-detected)
 
 The branch agents may never merge into. The final PR is opened *against*
 this branch; a human merges. The GitHub backend additionally installs a
 branch-protection rule on this branch during `create_problem()`.
+
+**Auto-detection.** When this field is omitted, the loader picks up the
+target repo's actual default branch by inspecting, in order:
+
+1. `git symbolic-ref --short refs/remotes/origin/HEAD` — the remote's
+   declared default (returns e.g. `origin/master` for a master-default
+   repo). The most authoritative source when a remote is configured.
+2. `git rev-parse --abbrev-ref HEAD` — the currently checked-out
+   branch. Used when there is no remote, or `origin/HEAD` is unset.
+   A detached `HEAD` is treated as no signal.
+3. `"main"` — last-resort fallback when neither signal is available
+   (no git binary, cwd outside any repository, etc.).
+
+So a repo whose trunk is `master` (legacy), `trunk` (Subversion-style),
+`develop` (gitflow-style), or any other name will Just Work without the
+manifest having to say so. Set the field explicitly only when you want
+to override the detected default — e.g. when running on a fork whose
+`origin/HEAD` is misconfigured, or when targeting a long-lived release
+branch instead of trunk.
 
 ### `safety.agents_can_merge` (bool, ignored — hardcoded `False`)
 
@@ -411,6 +502,44 @@ final_pr_reviewers:
   - kyleyhw
   - senior-reviewer
 ```
+
+### `safety.branch_cleanup` (string, default `"archive"`)
+
+Controls what `finalize()` does with non-winning candidate branches.
+
+| Value | Local backend | GitHub / GitLab backend |
+|---|---|---|
+| `archive` (default) | Loser branch labels are renamed to `archive/<original>` so they sort out of the active list. | Loser PRs are closed (already, by `prune`) and labelled `evolve-archived`. Branches stay alive for forensic value. |
+| `keep` | No-op — loser branch labels stay in place. | No-op — loser PRs stay closed but unlabelled. Historical behaviour. |
+| `delete` | Loser branch labels are blanked as a tombstone. | Loser PRs closed + branches deleted via the host's git data API. **Irreversible.** |
+
+Why `archive` is the default: a 4-round × 3-candidate run produces 11
+loser branches per problem. Without cleanup these accumulate forever.
+`archive` keeps the diffs reachable (a regression a week later may want
+to read them) without cluttering the active branch list.
+
+Why `delete` is opt-in: rejected candidates have forensic value. When a
+shipped winner breaks something, the rejected siblings often hint at
+why. Deleting them is a one-way operation; require an explicit choice.
+
+### `safety.run_ablation_report` (bool, default `true`)
+
+Toggles the post-hoc ablation pass. When enabled, after `finalize()`
+opens the winning PR, the supervisor:
+
+1. Computes the winner's diff vs. `safety.protected_branch`.
+2. Splits it into git hunks.
+3. For each hunk, materialises a variant with that hunk *removed* and
+   runs `problem.eval_command` on it.
+4. Attaches a contribution table to the final PR body (one row per
+   hunk, with the metric delta vs. the winner).
+
+The pass is *informational* — it never overrides the winner the search
+already chose. A hunk that scores better when removed is flagged in the
+table; a human (or a tighter re-run) decides what to do.
+
+Set to `false` when the eval is expensive and the human reviewer does
+not need the per-hunk breakdown.
 
 ---
 

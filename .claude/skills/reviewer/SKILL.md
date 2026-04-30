@@ -49,15 +49,41 @@ CHECKLIST:
   - test_coverage_preserved: pass | fail
   - no_regressions: pass | fail
   - hypothesis_coherent: pass | fail
+  - [if spec.production_runner set] eval_matches_production: pass | fail
   - [runtime only] equivalence_passed: pass | fail
   - [runtime only] control_flow_preserved: pass | fail
   - [runtime only] no_new_side_effects: pass | fail
   - [runtime only] perf_gain_real: pass | fail
+INFORMATIVE: <one-line note OR omit entirely>
 CONFIDENCE: high | medium | low
 ```
 
 Any `fail` item forces a verdict of `REJECT` (or `REQUEST_CHANGES` if the
 failure is ambiguous and a revised candidate could plausibly pass).
+
+### `INFORMATIVE` (optional)
+
+Use `INFORMATIVE` to attach a one-line observation that does not change
+the verdict but is worth surfacing to the human reviewer. The supervisor
+copies this string into the trait matrix and final PR body verbatim.
+Omit the line entirely (don't write `INFORMATIVE:` with an empty value)
+when there is nothing noteworthy to flag.
+
+Examples of when to use it:
+
+- The candidate APPROVES on metrics but the gain is concentrated in a
+  single hunk that may be fragile under input drift.
+- An equivalence check passed at the manifest's sample threshold, but
+  you noticed the hypothesis-space coverage was unusually narrow.
+- `eval_command` and `production_runner` agree, but only barely
+  (drift is within tolerance but on the order of measurement noise).
+- The diff fixes the headline metric but introduces a subtle stylistic
+  pattern that the codebase's other modules have actively avoided.
+
+`INFORMATIVE` does NOT replace `REASON`. `REASON` justifies the verdict;
+`INFORMATIVE` is a separate channel for "by the way…" notes. If the
+observation rises to the level of changing the verdict, fold it into
+`REASON` and adjust the verdict accordingly.
 
 ## Algorithm-mode checklist
 
@@ -67,7 +93,10 @@ failure is ambiguous and a revised candidate could plausibly pass).
 - **metrics_improved**: each metric is at least as good as the current best
   candidate on the frontier, and all hard constraints (`minimum` / `maximum`)
   are satisfied. A candidate that merely ties does not get approved unless it
-  trades off across a different axis (Pareto-improving).
+  trades off across a different axis (Pareto-improving). Compare against the
+  round-0 baseline (recorded by the supervisor in Phase 0b), not just the
+  prior round's frontier — a "winning" candidate that is still worse than
+  `main` should not pass this check.
 - **test_coverage_preserved**: the explorer did not delete or comment out
   tests. If `conclusion` mentions test changes, verify by inspecting the diff.
 - **no_regressions**: run the broader smoke suite named in
@@ -77,6 +106,14 @@ failure is ambiguous and a revised candidate could plausibly pass).
 - **hypothesis_coherent**: the hypothesis describes what changed; the
   conclusion honestly reports what happened. Red flag: a hypothesis that says
   "vectorise the loop" paired with a diff that only renames a variable.
+- **eval_matches_production** (only when `spec.production_runner` is set):
+  the supervisor runs `production_runner` on every approval candidate and
+  attaches the result before invoking you. The check `pass`es when the
+  per-metric drift between `eval_command` and `production_runner` is within
+  `spec.expected_baseline_tolerance`. If the supervisor has already marked
+  this `fail` in the inputs, force `REQUEST_CHANGES` (not `REJECT` — the
+  candidate's intent is not unsound; the eval setup is). Skip the line
+  entirely from your output when `production_runner` is unset.
 
 ## Runtime-mode additional checks
 

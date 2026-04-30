@@ -9,9 +9,32 @@ problem:
   description: "Optimise the order pricing calculator for speed and accuracy"
   mode: runtime                         # algorithm | runtime
   eval_command: "pytest tests/pricing/ --benchmark-json=benchmark.json"
+  # eval_cwd: bench/                    # working directory for eval_command;
+                                        # defaults to the candidate's worktree
+                                        # root. Set when the benchmark lives
+                                        # in a subdirectory and reads paths
+                                        # relative to itself.
+  # production_runner: "make bench-full" # Optional second eval used as a
+                                        # production-equivalent cross-check.
+                                        # Run on every APPROVED candidate.
+                                        # Disagreement with eval_command
+                                        # beyond expected_baseline_tolerance
+                                        # demotes APPROVE -> REQUEST_CHANGES.
+  # expected_baseline:                  # Per-metric expected baseline values.
+  #   duration_ms: 100                  # Round-0 measurement is compared to
+  #   test_pass_rate: 1.0               # this; the search aborts before round 1
+  #                                     # if any drift exceeds the tolerance.
+  # expected_baseline_tolerance: 0.05   # Fractional tolerance (5%). Applies
+                                        # to both expected_baseline and
+                                        # production_runner cross-check.
   metrics:
     - name: duration_ms
       optimise: minimize
+      primary: true                     # Marks the metric used by top_k pruning
+                                        # and tie-breakers. At most one metric
+                                        # may set primary: true. If none is
+                                        # marked, the first metric wins by
+                                        # fallback (preserves prior behaviour).
     - name: test_pass_rate
       optimise: maximize
       minimum: 1.0                      # hard constraint — must be 100%
@@ -38,6 +61,12 @@ runtime_mode:
   regression_tests: "pytest tests/pricing/ -x"
 
 safety:
+  # Omit this field to let the loader auto-detect the target repo's
+  # default branch (origin/HEAD, then the current branch, then "main"
+  # as a last-resort fallback). Set explicitly to override the
+  # detection — e.g. for a repo whose trunk is named "trunk" or
+  # "develop", or when running against a fork whose origin/HEAD is
+  # misconfigured.
   protected_branch: main
   # agents_can_merge is hardcoded False in every backend — this line is
   # informational only; the code ignores any override.
@@ -45,6 +74,21 @@ safety:
   require_human_approval: true
   final_pr_reviewers:
     - kyleyhw
+  # branch_cleanup controls what finalize() does with non-winning branches.
+  #   archive (default) — close the loser PRs and label them
+  #     `evolve-archived`; rename branch labels to `archive/...` in the
+  #     local backend. Branches stay alive for forensic value.
+  #   keep              — historical no-op behaviour; loser PRs stay
+  #     closed and branches stay in the active list.
+  #   delete            — additionally delete the loser branches via the
+  #     GitHub/GitLab API. Irreversible.
+  branch_cleanup: archive
+  # run_ablation_report toggles the post-hoc ablation pass that runs
+  # after finalize() — splits the winner's diff into hunks, evaluates
+  # each variant with one hunk removed, and attaches a contribution
+  # table to the final PR body. Disable when the eval is expensive and
+  # the human reviewer does not need the per-hunk breakdown.
+  run_ablation_report: true
 
 backend:
   type: local                           # local | github | gitlab

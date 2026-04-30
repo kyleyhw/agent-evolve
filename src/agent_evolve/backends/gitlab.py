@@ -147,6 +147,8 @@ class GitLabBackend(EvolveBackend):
             if c.status not in ("pruned", "rejected"):
                 self.prune(c.candidate_id, reason=f"not selected — winner is !{winner_id}")
 
+        self._apply_branch_cleanup(winner_id)
+
         final = self._api("POST", f"/projects/{self._project}/merge_requests", data={
             "source_branch": winner.branch_name(),
             "target_branch": self.spec.safety.protected_branch,
@@ -156,6 +158,39 @@ class GitLabBackend(EvolveBackend):
         })
         self._comment_issue(f"Finalised. Winner is !{winner_id}. Awaiting human approval on !{final['iid']}.")
         return final["web_url"]
+
+    def _apply_branch_cleanup(self, winner_id: str) -> None:
+        """Honour ``safety.branch_cleanup`` for losing candidates (GitLab).
+
+        Mirrors the GitHub backend's semantics: ``archive`` adds an
+        ``evolve-archived`` label to each loser MR; ``delete``
+        additionally deletes the source branch via the Repository
+        Branches API. ``keep`` is a no-op.
+        """
+        mode = self.spec.safety.branch_cleanup
+        if mode == "keep":
+            return
+        for c in self.get_leaderboard():
+            if c.candidate_id == winner_id:
+                continue
+            try:
+                self._api(
+                    "PUT",
+                    f"/projects/{self._project}/merge_requests/{c.candidate_id}",
+                    data={"add_labels": "evolve-archived"},
+                )
+            except Exception:
+                pass
+            if mode == "delete":
+                branch_name = c.branch or c.branch_name()
+                try:
+                    self._api(
+                        "DELETE",
+                        f"/projects/{self._project}/repository/branches/"
+                        f"{quote_plus(branch_name)}",
+                    )
+                except Exception:
+                    pass
 
     def _ensure_problem(self) -> None:
         if self.problem_id is None:
@@ -229,6 +264,8 @@ def _render_final_body(winner: Candidate, problem_id: str, spec: ProblemSpec) ->
             f"- **Reason:** {verdict.reason}",
             f"- **Confidence:** {verdict.confidence}",
         ]
+        if verdict.informative:
+            parts.append(f"- **Note:** {verdict.informative}")
     parts += [
         "",
         "---",

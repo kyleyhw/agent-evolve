@@ -44,6 +44,107 @@ class EvalResult:
         return None
 
 
+@dataclass
+class BaselineCheck:
+    """Result of comparing a measured baseline to the user's expectation.
+
+    ``matches`` is the headline boolean: ``True`` when every expected
+    metric is present in the measured set AND within the fractional
+    ``tolerance``. ``drifts`` records the per-metric *fractional* drift
+    (`(measured - expected) / |expected|`, or `inf` when ``expected ==
+    0`` and ``measured`` is non-zero), so the supervisor can build a
+    diagnostic message that names the specific metric that broke. Any
+    expected metric absent from the measured set is recorded in
+    ``missing``; presence of a missing metric forces ``matches = False``.
+
+    The measurement that produced this check is preserved on
+    ``measured`` for downstream consumers (the reviewer wants the actual
+    numbers, not just pass/fail).
+    """
+
+    matches: bool
+    measured: dict[str, float]
+    expected: dict[str, float]
+    tolerance: float
+    drifts: dict[str, float] = field(default_factory=dict)
+    missing: list[str] = field(default_factory=list)
+    message: str = ""
+
+
+def validate_baseline(
+    measured: dict[str, float],
+    expected: dict[str, float] | None,
+    tolerance: float,
+) -> BaselineCheck:
+    """Compare *measured* against *expected* with a fractional *tolerance*.
+
+    A pass is defined as: every key in ``expected`` is present in
+    ``measured`` and the fractional drift is at most ``tolerance``. The
+    fractional drift uses ``|expected|`` in the denominator; when
+    ``expected[name] == 0``, drift is ``0.0`` if measured is also ``0``
+    (any other measured value yields ``math.inf``).
+
+    Returns a :class:`BaselineCheck`. Never raises — even on type errors
+    in the inputs the function falls back to ``matches=False`` with a
+    descriptive ``message``, because the supervisor wants a structured
+    refusal here, not an exception.
+
+    When ``expected`` is ``None``, the gate is skipped: returns a check
+    with ``matches=True`` and an explanatory message. The supervisor
+    still gets ``measured`` echoed back so it can record the round-0
+    baseline regardless of whether validation was requested.
+    """
+    import math
+
+    if expected is None:
+        return BaselineCheck(
+            matches=True,
+            measured=dict(measured),
+            expected={},
+            tolerance=tolerance,
+            message="no expected_baseline configured — measurement recorded but not validated",
+        )
+
+    drifts: dict[str, float] = {}
+    missing: list[str] = []
+    fail_lines: list[str] = []
+    for name, expected_value in expected.items():
+        if name not in measured:
+            missing.append(name)
+            fail_lines.append(f"  - {name}: missing from measured baseline")
+            continue
+        measured_value = measured[name]
+        if expected_value == 0:
+            drift = 0.0 if measured_value == 0 else math.inf
+        else:
+            drift = (measured_value - expected_value) / abs(expected_value)
+        drifts[name] = drift
+        if abs(drift) > tolerance:
+            fail_lines.append(
+                f"  - {name}: expected {expected_value:g}, measured "
+                f"{measured_value:g} (drift {drift:+.2%}, tolerance "
+                f"{tolerance:.2%})"
+            )
+
+    matches = not fail_lines
+    if matches:
+        message = (
+            f"baseline matches expectation within {tolerance:.2%} tolerance "
+            f"({len(expected)} metric{'s' if len(expected) != 1 else ''} checked)"
+        )
+    else:
+        message = "baseline mismatch:\n" + "\n".join(fail_lines)
+    return BaselineCheck(
+        matches=matches,
+        measured=dict(measured),
+        expected=dict(expected),
+        tolerance=tolerance,
+        drifts=drifts,
+        missing=missing,
+        message=message,
+    )
+
+
 def run_eval(
     command: str | list[str],
     *,
