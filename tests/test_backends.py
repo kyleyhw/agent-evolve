@@ -132,3 +132,109 @@ def test_candidate_serialization_roundtrip():
 def test_evolve_backend_is_abstract():
     with pytest.raises(TypeError):
         EvolveBackend(None)  # type: ignore[abstract]
+
+
+def test_finalize_archives_loser_branches_by_default(tmp_path, sample_spec, approved_verdict):
+    """``branch_cleanup`` defaults to ``"archive"``; loser branch labels get prefixed."""
+    backend = LocalBackend(sample_spec, root=tmp_path)
+    pid = backend.create_problem(sample_spec)
+
+    winner = Candidate(problem_id=pid, candidate_id="1", operator="mutate", round=1)
+    backend.submit_candidate(winner)
+    backend.score_candidate("1", {"duration_ms": 60.0, "test_pass_rate": 1.0})
+    backend.record_verdict("1", approved_verdict)
+
+    loser = Candidate(problem_id=pid, candidate_id="2", operator="explore", round=1)
+    backend.submit_candidate(loser)
+    backend.score_candidate("2", {"duration_ms": 120.0, "test_pass_rate": 1.0})
+
+    backend.finalize("1")
+
+    leaderboard = {c.candidate_id: c for c in backend.get_leaderboard()}
+    # Winner branch label is unchanged.
+    assert not (leaderboard["1"].branch or leaderboard["1"].branch_name()).startswith("archive/")
+    # Loser branch label is prefixed.
+    loser_branch = leaderboard["2"].branch or leaderboard["2"].branch_name()
+    assert loser_branch.startswith("archive/")
+
+
+def test_finalize_keep_branches_when_cleanup_is_keep(tmp_path, sample_spec, approved_verdict):
+    """``branch_cleanup: keep`` is the historical no-op behaviour."""
+    from dataclasses import replace
+    spec = replace(sample_spec, safety=replace(sample_spec.safety, branch_cleanup="keep"))
+
+    backend = LocalBackend(spec, root=tmp_path)
+    pid = backend.create_problem(spec)
+
+    winner = Candidate(problem_id=pid, candidate_id="1", operator="mutate", round=1)
+    backend.submit_candidate(winner)
+    backend.score_candidate("1", {"duration_ms": 60.0, "test_pass_rate": 1.0})
+    backend.record_verdict("1", approved_verdict)
+
+    loser = Candidate(problem_id=pid, candidate_id="2", operator="explore", round=1)
+    backend.submit_candidate(loser)
+    backend.score_candidate("2", {"duration_ms": 120.0, "test_pass_rate": 1.0})
+
+    backend.finalize("1")
+
+    leaderboard = {c.candidate_id: c for c in backend.get_leaderboard()}
+    loser_branch = leaderboard["2"].branch or leaderboard["2"].branch_name()
+    assert not loser_branch.startswith("archive/")
+
+
+def test_finalize_delete_clears_loser_branch_label(tmp_path, sample_spec, approved_verdict):
+    """``branch_cleanup: delete`` blanks the branch label as a tombstone."""
+    from dataclasses import replace
+    spec = replace(sample_spec, safety=replace(sample_spec.safety, branch_cleanup="delete"))
+
+    backend = LocalBackend(spec, root=tmp_path)
+    pid = backend.create_problem(spec)
+
+    winner = Candidate(problem_id=pid, candidate_id="1", operator="mutate", round=1)
+    backend.submit_candidate(winner)
+    backend.score_candidate("1", {"duration_ms": 60.0, "test_pass_rate": 1.0})
+    backend.record_verdict("1", approved_verdict)
+
+    loser = Candidate(problem_id=pid, candidate_id="2", operator="explore", round=1)
+    backend.submit_candidate(loser)
+    backend.score_candidate("2", {"duration_ms": 120.0, "test_pass_rate": 1.0})
+
+    backend.finalize("1")
+
+    leaderboard = {c.candidate_id: c for c in backend.get_leaderboard()}
+    assert leaderboard["2"].branch == ""
+
+
+def test_finalize_writes_artifact_bundle(tmp_path, sample_spec, approved_verdict):
+    """``finalize()`` populates ``<problem>/artifacts/`` with the run snapshot."""
+    backend = LocalBackend(sample_spec, root=tmp_path)
+    pid = backend.create_problem(sample_spec)
+
+    winner = Candidate(problem_id=pid, candidate_id="1", operator="mutate", round=1,
+                       hypothesis="x")
+    backend.submit_candidate(winner)
+    backend.score_candidate("1", {"duration_ms": 60.0, "test_pass_rate": 1.0})
+    backend.record_verdict("1", approved_verdict)
+
+    backend.finalize("1")
+
+    artifact_dir = tmp_path / pid / "artifacts"
+    assert artifact_dir.exists()
+    assert (artifact_dir / "MANIFEST.txt").exists()
+    assert (artifact_dir / "trait_matrix.json").exists()
+    assert (artifact_dir / "candidates" / "1.state.json").exists()
+
+
+def test_reviewer_verdict_round_trips_informative_field():
+    """The new ``informative`` field survives ``to_dict`` / ``from_dict``."""
+    c = Candidate(
+        problem_id="1", candidate_id="3",
+        operator="mutate", round=2,
+        reviewer_verdict=ReviewerVerdict(
+            verdict="APPROVE", reason="clean",
+            checklist={"scope_compliant": True}, confidence="high",
+            informative="gain concentrated in one hunk; consider re-running with tighter scope",
+        ),
+    )
+    restored = Candidate.from_dict(c.to_dict())
+    assert restored.reviewer_verdict.informative.startswith("gain concentrated")

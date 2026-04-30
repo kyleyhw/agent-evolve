@@ -46,6 +46,7 @@ If the user described the goal in prose ("evolve `src/pricing/calculator.py`
 for speed, keep tests passing"), construct the spec directly:
 
 ```python
+from agent_evolve.git_utils import detect_default_branch
 from agent_evolve.models import (
     BackendSpec, EvolutionSpec, Metric, OptimiseDirection,
     ProblemSpec, RuntimeModeSpec, SafetySpec, ScopeSpec,
@@ -58,7 +59,11 @@ spec = ProblemSpec(
     scope=ScopeSpec(target_files=[...], do_not_touch=[...]),
     evolution=EvolutionSpec(),              # defaults: 5 rounds, 3 candidates
     runtime_mode=RuntimeModeSpec(),         # equivalence required by default
-    safety=SafetySpec(),
+    # detect_default_branch() inspects origin/HEAD then the current branch
+    # so SafetySpec picks up whatever the target repo actually calls its
+    # trunk (main / master / trunk / develop / ...). Falls back to "main"
+    # only when no signal is available.
+    safety=SafetySpec(protected_branch=detect_default_branch()),
     backend=BackendSpec(type="local"),
 )
 ```
@@ -89,6 +94,73 @@ After Path B, *offer* (do not force) to save the inferred spec as
 import yaml
 yaml.safe_dump(spec_to_dict(spec), Path("agent-evolve.yaml").open("w"))
 ```
+
+## Phase 0b — Measure the baseline
+
+Before round 1, you measure the actual baseline by running the eval
+command on `safety.protected_branch`. This anchors the search: every
+later candidate is "better than the baseline" or "worse than the
+baseline" relative to *this measurement*, not relative to whatever the
+user implied in prose.
+
+Two reasons it is non-negotiable:
+
+1. **Catch eval misconfiguration before burning the search budget.**
+   If the eval command's `cwd` is wrong, the dataset is missing, or the
+   benchmark is degenerate, the search will obediently optimise toward
+   nonsense. Round-0 measurement makes that visible immediately.
+2. **Anchor `metrics_improved`.** The reviewer compares each candidate
+   to the active frontier, but the *frontier* is anchored to whatever
+   round 1 produced. Without an explicit baseline measurement, a
+   regressing-but-better-than-each-other run can pass the reviewer
+   gate while still being worse than `main`.
+
+The procedure:
+
+```python
+from agent_evolve.eval import run_eval, validate_baseline
+
+# 1. Check out the protected branch in a clean working tree (a git
+#    worktree is the safe way — does not disturb the user's current
+#    branch). Use spec.eval_cwd if set; otherwise the worktree root.
+baseline_cwd = spec.eval_cwd or "<worktree root>"
+baseline_eval = run_eval(spec.eval_command, cwd=baseline_cwd)
+
+# 2. Validate against the user's stated expectation, if any.
+check = validate_baseline(
+    measured=baseline_eval.metrics,
+    expected=spec.expected_baseline,        # None when not configured
+    tolerance=spec.expected_baseline_tolerance,
+)
+
+if not check.matches:
+    # Abort. The user's eval setup disagrees with their stated
+    # expectation by more than the tolerance — the search would optimise
+    # toward a number that does not reflect production behaviour.
+    raise RuntimeError(f"baseline mismatch — aborting:\n{check.message}")
+
+# 3. Record the measured baseline as the round-0 anchor. The trait
+#    matrix and the reviewer's metrics_improved check both read this.
+backend.update_graph(
+    mermaid="",
+    html_path=None,
+)
+# Persist the baseline measurement on the problem root so the reviewer
+# can read it. Local backend: write to <problem>/baseline.json. Github
+# backend: include in the issue body under a ## Baseline section.
+```
+
+When `spec.expected_baseline is None`, `validate_baseline` returns
+`matches=True` with a "not validated" message — the gate is skipped but
+the measured baseline is still recorded. Always run the measurement
+even when validation is off.
+
+If the eval command is genuinely impossible to run on the protected
+branch (e.g. the function under evolution does not exist yet — a
+greenfield correctness search), surface that to the user before
+proceeding: a missing baseline means the reviewer cannot evaluate
+"metrics_improved" honestly, and you should ask whether to relax the
+metric to `test_pass_rate >= 1.0` only.
 
 ## External agent dispatch
 
@@ -244,7 +316,11 @@ For each returned candidate:
 
 1. Call `scope.enforce_scope(diff, spec.scope)`. If `in_scope` is false:
    `backend.prune(candidate_id, f"scope violation: {violations}")`. Skip.
-2. Call `eval.run_eval(spec.problem.eval_command, cwd=candidate_workdir)`.
+2. Call `eval.run_eval(spec.eval_command, cwd=spec.eval_cwd or candidate_workdir)`.
+   When `spec.eval_cwd` is set, the eval runs in that directory rather
+   than the candidate's worktree root — necessary when the benchmark
+   lives in `tests/perf/`, `bench/`, etc. and reads paths relative to
+   itself.
 3. If `spec.mode == "runtime"` and
    `spec.runtime_mode.equivalence_check != "disabled"`: run
    `equivalence.check_equivalence` on the target function pair.
@@ -265,6 +341,58 @@ Dispatch path depends on `spec.agents.reviewer`:
   treating the reviewer SKILL as the system prompt and emitting the
   `VERDICT/REASON/CHECKLIST/CONFIDENCE` block to stdout. Parse it into a
   `ReviewerVerdict` before calling `backend.record_verdict`.
+
+#### Phase E.5 — production_runner cross-check (when configured)
+
+If `spec.production_runner` is set, run it on every candidate the
+reviewer just **APPROVED** (not on REQUEST_CHANGES / REJECT — those are
+already out, no point spending the wallclock). The production runner is
+the user's higher-fidelity / production-equivalent benchmark; its job
+is to detect when `eval_command` has over-fit to a fast-but-incomplete
+proxy.
+
+```python
+if spec.production_runner and verdict.verdict == "APPROVE":
+    prod = run_eval(spec.production_runner, cwd=spec.eval_cwd or candidate_workdir)
+    check = validate_baseline(
+        measured=prod.metrics,
+        expected=candidate.metrics,                 # eval said this
+        tolerance=spec.expected_baseline_tolerance,
+    )
+    if not check.matches:
+        # Eval said the metrics moved one way; production_runner
+        # disagrees beyond the tolerance. Demote APPROVE to
+        # REQUEST_CHANGES so a human (or a re-prompted explorer)
+        # decides what to do.
+        demoted = ReviewerVerdict(
+            verdict="REQUEST_CHANGES",
+            reason=(
+                f"eval/production drift exceeds tolerance: {check.message}. "
+                f"Original reviewer verdict was APPROVE."
+            ),
+            checklist={**verdict.checklist, "eval_matches_production": False},
+            confidence=verdict.confidence,
+            informative=verdict.informative,
+        )
+        backend.record_verdict(candidate_id, demoted)
+    elif any(abs(d) > 0.5 * spec.expected_baseline_tolerance for d in check.drifts.values()):
+        # Within tolerance, but on the order of measurement noise —
+        # surface as INFORMATIVE, do not change the verdict.
+        annotated = ReviewerVerdict(
+            verdict=verdict.verdict,
+            reason=verdict.reason,
+            checklist={**verdict.checklist, "eval_matches_production": True},
+            confidence=verdict.confidence,
+            informative=(
+                f"eval/production drift {max(abs(d) for d in check.drifts.values()):.1%} "
+                f"is within tolerance but worth a manual look"
+            ),
+        )
+        backend.record_verdict(candidate_id, annotated)
+```
+
+When `spec.production_runner` is `None`, skip this phase entirely — the
+reviewer's `eval_matches_production` checklist item is also skipped.
 
 ### Phase F — Prune
 
@@ -287,17 +415,65 @@ After the final round:
 
 1. Identify the winner. Winner = highest-scoring candidate on the Pareto
    front whose reviewer verdict is `APPROVE`. Tie-break by earliest
-   `approved` time.
+   `approved` time. For `top_k` pruning, "highest-scoring" is measured
+   on `spec.primary_metric()` — the `Metric` flagged `primary=True`, or
+   the first metric as fallback.
 2. If no winner exists: abort with a clear note in the problem description
    ("all candidates rejected — human intervention required"); **do not**
    open a final PR.
 3. Otherwise call `backend.finalize(winner_id)`. The backend:
-   - closes/archives every non-winning branch
-   - opens a new PR from the winner's branch against `main`
-   - attaches the full Trait Matrix, evolution graph, and reviewer verdict
+   - applies `safety.branch_cleanup` to every non-winning branch
+     (`keep` / `archive` / `delete`)
+   - bundles run artifacts (report HTML, trait matrix, per-candidate
+     EVOLVE_STATE) under `<problem>/artifacts/` (local backend) or
+     attaches them to the final PR (github / gitlab)
+   - opens a new PR from the winner's branch against the protected
+     branch (`spec.safety.protected_branch`)
+   - attaches the full Trait Matrix, evolution graph, and reviewer
+     verdict (including any `INFORMATIVE` note from the reviewer)
    - returns the PR URL
-4. Record the final PR URL in the problem root.
-5. **Stop.** Do not monitor the PR. Do not re-run. Do not merge.
+4. **Run the post-hoc ablation report** when
+   `spec.safety.run_ablation_report` is `True` (the default):
+
+   ```python
+   from agent_evolve.ablation import (
+       run_ablation_report, render_ablation_markdown,
+   )
+
+   diff_text = git_diff(winner.branch_name(), spec.safety.protected_branch)
+
+   def apply_ablation(hunk):
+       # Materialise the hunk-stripped tree in a scratch worktree.
+       # Return True on success, False if `git apply --reverse` cannot
+       # apply the patch cleanly. The supervisor is responsible for
+       # restoring the tree between hunks.
+       return apply_reverse_patch(hunk.patch, scratch_worktree)
+
+   report = run_ablation_report(
+       winner_id=winner.candidate_id,
+       winner_metrics=winner.metrics,
+       diff_text=diff_text,
+       eval_command=spec.eval_command,
+       eval_cwd=spec.eval_cwd or scratch_worktree,
+       apply_ablation=apply_ablation,
+   )
+   pr_body_addendum = render_ablation_markdown(report)
+   # Append the markdown to the final PR body — backend-specific:
+   #   local:  doc["ablation_report_md"] = pr_body_addendum
+   #   github: final.edit(body=final.body + pr_body_addendum)
+   #   gitlab: same shape via the MR PUT endpoint
+   ```
+
+   The pass is *informational*: it does not promote a hunk-stripped
+   variant to "new winner" even if such a variant scores better. It
+   only flags the discrepancy in the report. A human (or a tighter
+   re-run) decides what to do.
+
+   When `spec.safety.run_ablation_report` is `False`, skip this step
+   entirely — useful when the eval is expensive and the human reviewer
+   does not need the per-hunk breakdown.
+5. Record the final PR URL in the problem root.
+6. **Stop.** Do not monitor the PR. Do not re-run. Do not merge.
 
 ## Failure modes
 

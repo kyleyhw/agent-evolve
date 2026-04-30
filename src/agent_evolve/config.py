@@ -11,6 +11,7 @@ from typing import Any
 
 import yaml
 
+from agent_evolve.git_utils import detect_default_branch
 from agent_evolve.models import (
     AgentsSpec,
     BackendSpec,
@@ -57,12 +58,25 @@ def _parse(raw: dict[str, Any], *, source: Path) -> ProblemSpec:
         raise ManifestError(f"{source}: problem.metrics must list at least one metric")
 
     metrics = [_parse_metric(m, source) for m in metrics_raw]
+    primary_count = sum(1 for m in metrics if m.primary)
+    if primary_count > 1:
+        primary_names = ", ".join(repr(m.name) for m in metrics if m.primary)
+        raise ManifestError(
+            f"{source}: at most one metric may set primary: true — "
+            f"got {primary_count} ({primary_names})"
+        )
 
     return ProblemSpec(
         version=raw.get("version", 1),
         description=_require(problem, "description", str, source, ctx="problem."),
         mode=problem.get("mode", "algorithm"),
         eval_command=_require(problem, "eval_command", str, source, ctx="problem."),
+        eval_cwd=_optional_str(problem.get("eval_cwd")),
+        expected_baseline=_parse_expected_baseline(problem.get("expected_baseline"), source),
+        expected_baseline_tolerance=_parse_tolerance(
+            problem.get("expected_baseline_tolerance", 0.05), source
+        ),
+        production_runner=_optional_str(problem.get("production_runner")),
         metrics=metrics,
         scope=ScopeSpec(
             target_files=list(_require(scope, "target_files", list, source, ctx="scope.")),
@@ -81,10 +95,12 @@ def _parse(raw: dict[str, Any], *, source: Path) -> ProblemSpec:
             regression_tests=runtime_mode.get("regression_tests"),
         ),
         safety=SafetySpec(
-            protected_branch=safety.get("protected_branch", "main"),
+            protected_branch=_resolve_protected_branch(safety, source.parent),
             agents_can_merge=False,
             require_human_approval=bool(safety.get("require_human_approval", True)),
             final_pr_reviewers=list(safety.get("final_pr_reviewers", []) or []),
+            branch_cleanup=_parse_branch_cleanup(safety.get("branch_cleanup", "archive"), source),
+            run_ablation_report=bool(safety.get("run_ablation_report", True)),
         ),
         backend=BackendSpec(
             type=_require(backend, "type", str, source, ctx="backend."),
@@ -97,6 +113,88 @@ def _parse(raw: dict[str, Any], *, source: Path) -> ProblemSpec:
             reviewer=str(agents.get("reviewer", "claude")),
         ),
     )
+
+
+def _optional_str(value: Any) -> str | None:
+    """Coerce an optional manifest field to a non-empty string or ``None``."""
+    if value is None:
+        return None
+    if isinstance(value, str):
+        return value or None
+    return str(value)
+
+
+def _parse_expected_baseline(value: Any, source: Path) -> dict[str, float] | None:
+    """Validate ``problem.expected_baseline`` is a ``{metric: number}`` mapping."""
+    if value is None:
+        return None
+    if not isinstance(value, dict):
+        raise ManifestError(
+            f"{source}: problem.expected_baseline must be a mapping of "
+            f"metric name -> expected value, got {type(value).__name__}"
+        )
+    out: dict[str, float] = {}
+    for k, v in value.items():
+        if not isinstance(k, str):
+            raise ManifestError(
+                f"{source}: problem.expected_baseline keys must be strings; "
+                f"got {type(k).__name__}"
+            )
+        if isinstance(v, bool) or not isinstance(v, (int, float)):
+            raise ManifestError(
+                f"{source}: problem.expected_baseline['{k}'] must be a number; "
+                f"got {type(v).__name__}"
+            )
+        out[k] = float(v)
+    return out
+
+
+def _parse_tolerance(value: Any, source: Path) -> float:
+    """Validate ``problem.expected_baseline_tolerance`` is a non-negative number."""
+    if isinstance(value, bool) or not isinstance(value, (int, float)):
+        raise ManifestError(
+            f"{source}: problem.expected_baseline_tolerance must be a number; "
+            f"got {type(value).__name__}"
+        )
+    fv = float(value)
+    if fv < 0:
+        raise ManifestError(
+            f"{source}: problem.expected_baseline_tolerance must be non-negative; "
+            f"got {fv}"
+        )
+    return fv
+
+
+_BRANCH_CLEANUP_VALUES = ("keep", "archive", "delete")
+
+
+def _parse_branch_cleanup(value: Any, source: Path) -> str:
+    """Validate ``safety.branch_cleanup`` is one of ``keep|archive|delete``."""
+    if not isinstance(value, str) or value not in _BRANCH_CLEANUP_VALUES:
+        raise ManifestError(
+            f"{source}: safety.branch_cleanup must be one of "
+            f"{_BRANCH_CLEANUP_VALUES}; got {value!r}"
+        )
+    return value
+
+
+def _resolve_protected_branch(safety: dict[str, Any], cwd: Path) -> str:
+    """Pick the protected-branch name for a manifest.
+
+    If the YAML explicitly names ``safety.protected_branch``, the user's
+    choice wins verbatim (including, deliberately, the case where the
+    user names a branch that does not exist locally — surfacing the typo
+    is more useful than silently rewriting their intent).
+
+    Otherwise, auto-detect from the manifest directory's git state. The
+    detector inspects ``origin/HEAD`` first, then the current branch,
+    and finally falls back to ``"main"`` so there is always *some*
+    string to populate the dataclass with.
+    """
+    explicit = safety.get("protected_branch")
+    if isinstance(explicit, str) and explicit:
+        return explicit
+    return detect_default_branch(cwd)
 
 
 def _parse_explorer_value(value: Any, *, source: Path) -> str | list[str]:
@@ -139,11 +237,17 @@ def _parse_metric(raw: dict[str, Any], source: Path) -> Metric:
         raise ManifestError(
             f"{source}: metric '{name}' has invalid optimise '{direction}' — must be 'minimize' or 'maximize'"
         ) from e
+    primary = raw.get("primary", False)
+    if not isinstance(primary, bool):
+        raise ManifestError(
+            f"{source}: metric '{name}' has non-boolean primary {primary!r} — must be true or false"
+        )
     return Metric(
         name=name,
         optimise=optimise,
         minimum=raw.get("minimum"),
         maximum=raw.get("maximum"),
+        primary=primary,
     )
 
 

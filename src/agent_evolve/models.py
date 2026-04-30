@@ -35,12 +35,18 @@ class Metric:
     A ``minimum``/``maximum`` hard constraint, when set, must be satisfied by
     every candidate or the reviewer rejects regardless of any other score.
     Soft metrics are used for Pareto ranking.
+
+    The ``primary`` flag marks the single metric used by tie-breakers and
+    ``top_k`` pruning. At most one metric per :class:`ProblemSpec` may set
+    ``primary=True``; if none is marked, the first metric in the list is
+    used as the implicit primary (preserving the historical default).
     """
 
     name: str
     optimise: OptimiseDirection
     minimum: float | None = None
     maximum: float | None = None
+    primary: bool = False
 
     def satisfies(self, value: float) -> bool:
         if self.minimum is not None and value < self.minimum:
@@ -48,6 +54,22 @@ class Metric:
         if self.maximum is not None and value > self.maximum:
             return False
         return True
+
+
+def primary_metric(metrics: list[Metric]) -> Metric:
+    """Return the metric flagged ``primary=True``, or the first metric as fallback.
+
+    Encapsulates the implicit-primary fallback so callers (top_k pruning,
+    tie-break logic) do not have to reimplement it. Raises ``ValueError`` on
+    an empty list — the manifest parser already rejects that case, so this
+    only fires on programmatic misuse.
+    """
+    if not metrics:
+        raise ValueError("primary_metric() requires at least one metric")
+    for m in metrics:
+        if m.primary:
+            return m
+    return metrics[0]
 
 
 @dataclass(frozen=True)
@@ -72,6 +94,9 @@ class RuntimeModeSpec:
     regression_tests: str | None = None
 
 
+BranchCleanupMode = Literal["keep", "archive", "delete"]
+
+
 @dataclass(frozen=True)
 class SafetySpec:
     """Hard constraints that agents cannot override.
@@ -79,12 +104,41 @@ class SafetySpec:
     ``agents_can_merge`` is always coerced to False in :class:`EvolveBackend`
     regardless of config — this field exists for surface parity with the
     example YAML, not as a tunable.
+
+    ``protected_branch`` defaults to the literal string ``"main"`` for
+    direct dataclass construction (kept zero-IO so unit tests are
+    deterministic). Loaders that know the target repo
+    (``agent_evolve.config.load_manifest`` and the supervisor SKILL's
+    natural-language path) replace this default with the result of
+    :func:`agent_evolve.git_utils.detect_default_branch`, so the actual
+    repo's trunk name (``main`` / ``master`` / ``trunk`` / ``develop``)
+    is used in practice. To override, set ``safety.protected_branch``
+    explicitly in the manifest.
+
+    ``branch_cleanup`` controls what ``finalize()`` does with the
+    non-winning candidate branches. ``archive`` (the default) keeps the
+    branches around but marks them so they no longer clutter the active
+    list — closed PR + ``evolve-archived`` label on GitHub, status-only
+    rename in the local backend's state file. ``delete`` removes the
+    branches outright (irreversible — use only when forensic value of
+    rejected candidates is not needed). ``keep`` is the historical
+    behaviour and leaves losers in place.
+
+    ``run_ablation_report`` controls whether ``finalize()`` runs a
+    post-hoc ablation pass on the winning diff. When enabled (default),
+    the supervisor splits the winner's diff into git hunks, runs the
+    eval with each hunk removed in turn, and attaches the resulting
+    contribution table to the final PR body. Set to ``False`` to skip
+    this pass — useful when the eval is expensive and the human reviewer
+    does not need the per-hunk breakdown.
     """
 
     protected_branch: str = "main"
     agents_can_merge: bool = False
     require_human_approval: bool = True
     final_pr_reviewers: list[str] = field(default_factory=list)
+    branch_cleanup: BranchCleanupMode = "archive"
+    run_ablation_report: bool = True
 
 
 @dataclass(frozen=True)
@@ -137,7 +191,41 @@ class AgentsSpec:
 
 @dataclass(frozen=True)
 class ProblemSpec:
-    """The full manifest loaded from ``agent-evolve.yaml``."""
+    """The full manifest loaded from ``agent-evolve.yaml``.
+
+    Most fields map 1:1 onto YAML sections of the same name. The fields
+    documented below need a closer look.
+
+    ``eval_cwd`` is the working directory for the eval command. Use this
+    when the eval lives in a subdirectory (``tests/perf/``, ``bench/``)
+    rather than at the repo root. When unset, the supervisor uses the
+    candidate's working tree root as cwd, matching the historical
+    behaviour.
+
+    ``expected_baseline`` and ``expected_baseline_tolerance`` together
+    form a sanity-check gate the supervisor runs before round 1: it
+    measures the actual baseline by executing ``eval_command`` on
+    ``safety.protected_branch``, then refuses to start the search if any
+    metric's measured baseline differs from the user-supplied
+    ``expected_baseline`` value by more than ``expected_baseline_tolerance``
+    (a fractional tolerance, default 5%). Catches misconfigured eval
+    commands, stale fixtures, missing datasets, and similar failure
+    modes where the search would otherwise optimise toward a number
+    that does not reflect production behaviour. When
+    ``expected_baseline`` is ``None`` (the default), the gate is
+    skipped — the supervisor still records the measured baseline but
+    does not validate it.
+
+    ``production_runner`` is an optional second eval command that
+    evaluates a candidate against a higher-fidelity / production-equivalent
+    benchmark. The supervisor runs it only on candidates the reviewer
+    has approved (not on every slot of every round, which would dominate
+    wallclock). Disagreement between ``eval_command`` and
+    ``production_runner`` metrics triggers an ``INFORMATIVE`` annotation
+    (small drift) or a ``REQUEST_CHANGES`` demotion (large drift,
+    > ``expected_baseline_tolerance``) on the candidate. Skipped
+    silently when unset.
+    """
 
     description: str
     mode: EvolveMode
@@ -149,15 +237,34 @@ class ProblemSpec:
     safety: SafetySpec
     backend: BackendSpec
     agents: AgentsSpec = field(default_factory=AgentsSpec)
+    eval_cwd: str | None = None
+    expected_baseline: dict[str, float] | None = None
+    expected_baseline_tolerance: float = 0.05
+    production_runner: str | None = None
     version: int = 1
+
+    def primary_metric(self) -> Metric:
+        """Convenience: the metric flagged ``primary=True`` (or first metric)."""
+        return primary_metric(self.metrics)
 
 
 @dataclass
 class ReviewerVerdict:
+    """Reviewer's structured judgment on a single candidate.
+
+    ``informative`` carries an out-of-band note that does not gate
+    acceptance — e.g. "approve, but the gain is concentrated in a single
+    hunk that may be fragile under input drift". The supervisor surfaces
+    this in the trait matrix and final PR body so a human reviewer sees
+    it without it competing with the verdict label. ``None`` means no
+    informative note attached.
+    """
+
     verdict: ReviewerVerdictLabel
     reason: str
     checklist: dict[str, bool]
     confidence: Literal["high", "medium", "low"]
+    informative: str | None = None
 
 
 @dataclass
