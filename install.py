@@ -34,6 +34,53 @@ from pathlib import Path
 REPO_ROOT = Path(__file__).resolve().parent
 SKILLS_SRC = REPO_ROOT / ".claude" / "skills"
 USER_SKILLS = Path.home() / ".claude" / "skills"
+SCRIPTS_DIR = REPO_ROOT / "scripts"
+
+
+def vendor_assets() -> int:
+    """Fetch the vendored d3 bundle so HTML reports are fully self-contained.
+
+    Best-effort: a network failure (offline install, CDN unreachable)
+    is logged and the install continues. Reports rendered without the
+    vendored bundle fall back to a CDN ``<script src=...>`` reference,
+    which keeps the report viewable on a connected machine and only
+    fails on truly air-gapped consumers.
+
+    Skipping (via ``--skip-vendor``) is intended for deliberate
+    air-gapped installs where the network call would be a waste of
+    time. The CDN fallback path in ``html_report.py`` is otherwise
+    indistinguishable from running install.py without network.
+    """
+    print("[install] vendoring third-party assets (d3.js)")
+    # Import the vendor script as a module so we get a Python-level
+    # return code rather than having to parse subprocess stderr. The
+    # scripts/ directory is not part of the package, so we extend
+    # sys.path for the duration of the import.
+    sys.path.insert(0, str(SCRIPTS_DIR))
+    try:
+        import vendor_d3  # type: ignore[import-not-found]
+    except ImportError as e:
+        print(
+            f"[install]   could not import scripts/vendor_d3.py — {e}. "
+            f"Continuing; reports will use the CDN fallback.",
+            file=sys.stderr,
+        )
+        return 0  # soft failure — install does not abort
+    finally:
+        sys.path.pop(0)
+
+    # ``vendor()`` returns 0 (success / already up-to-date), 2 (hash
+    # mismatch — surface as install warning), or 3 (network failure —
+    # already logged inside vendor()). Anything non-zero is logged but
+    # does not fail the install.
+    rc = vendor_d3.vendor(force=False, verbose=True)
+    if rc not in (0, 3):
+        print(
+            f"[install]   vendor_d3 exited {rc}. Reports will fall back to "
+            f"the CDN at render time.",
+            file=sys.stderr,
+        )
+    return 0  # never propagate a non-zero from vendoring
 
 
 def install_python_package() -> int:
@@ -46,8 +93,15 @@ def install_python_package() -> int:
             file=sys.stderr,
         )
         return 127
+    # ``--reinstall`` forces uv to rebuild the wheel from the current
+    # source instead of serving a cached wheel keyed on (source path,
+    # version). Without it, edits to package code go unnoticed when
+    # ``pyproject.toml``'s ``version`` field is unchanged across
+    # installs — a footgun we hit during the d3-vendoring rollout.
+    # ``--force`` covers the executable-exists case for the CLI shim.
     result = subprocess.run(
-        ["uv", "tool", "install", "--force", "--from", str(REPO_ROOT), "agent-evolve"],
+        ["uv", "tool", "install", "--force", "--reinstall",
+         "--from", str(REPO_ROOT), "agent-evolve"],
         cwd=REPO_ROOT,
         check=False,
     )
@@ -201,6 +255,10 @@ def main() -> int:
         "--skip-skills", action="store_true",
         help="do not symlink the skills",
     )
+    parser.add_argument(
+        "--skip-vendor", action="store_true",
+        help="do not fetch the vendored d3 bundle (offline / air-gapped install)",
+    )
     args = parser.parse_args()
 
     exit_code = 0
@@ -213,6 +271,11 @@ def main() -> int:
         rc = install_skills(force=args.force)
         if rc != 0 and exit_code == 0:
             exit_code = rc
+
+    if not args.skip_vendor:
+        # Vendoring is best-effort; never propagates a non-zero into
+        # the overall install exit code (see vendor_assets).
+        vendor_assets()
 
     print()
     if exit_code == 0:

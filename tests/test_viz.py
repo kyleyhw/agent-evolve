@@ -63,9 +63,48 @@ def test_html_report_is_self_contained(tmp_path):
     out = render_html(graph, tmp_path / "report.html")
     content = Path(out).read_text(encoding="utf-8")
     assert "<!doctype html>" in content.lower()
-    assert "d3.min.js" in content
+    # Either source mode is acceptable: vendored-inline (preferred) or
+    # CDN fallback. Both leave a ``data-source`` marker on the <script>
+    # tag so a future test can target one specifically.
+    assert 'data-source="vendored"' in content or 'data-source="cdn"' in content
     assert '"c3"' in content  # node data
     assert "candidate-3" in content or "c3" in content
+
+
+def test_html_report_inlines_vendored_d3_when_present(tmp_path, monkeypatch):
+    """When the vendored bundle exists, its bytes are inlined into the report."""
+    from agent_evolve.viz import html_report
+
+    sentinel_bytes = "/* vendored-d3-test-sentinel */ const D3_TEST = 42;"
+    fake_vendor = tmp_path / "d3.v7.min.js"
+    fake_vendor.write_text(sentinel_bytes, encoding="utf-8")
+    monkeypatch.setattr(html_report, "_VENDORED_D3", fake_vendor)
+
+    graph = build_graph(_candidates())
+    out = render_html(graph, tmp_path / "report.html")
+    content = Path(out).read_text(encoding="utf-8")
+
+    assert 'data-source="vendored"' in content
+    assert "vendored-d3-test-sentinel" in content
+    # No CDN URL in the output when the vendored bundle was used.
+    assert "cdn.jsdelivr.net" not in content
+
+
+def test_html_report_falls_back_to_cdn_when_vendored_missing(tmp_path, monkeypatch, capsys):
+    """When the vendored file is absent, the report references the CDN with a stderr warning."""
+    from agent_evolve.viz import html_report
+
+    missing_vendor = tmp_path / "does-not-exist.js"
+    monkeypatch.setattr(html_report, "_VENDORED_D3", missing_vendor)
+
+    graph = build_graph(_candidates())
+    render_html(graph, tmp_path / "report.html")
+    content = (tmp_path / "report.html").read_text(encoding="utf-8")
+
+    assert 'data-source="cdn"' in content
+    assert "cdn.jsdelivr.net" in content
+    captured = capsys.readouterr()
+    assert "vendored d3 bundle missing" in captured.err
 
 
 def test_html_report_encodes_unsafe_strings(tmp_path):

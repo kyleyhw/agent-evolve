@@ -1,8 +1,22 @@
 """Interactive HTML report.
 
-Produces a single self-contained ``evolve-report.html`` — D3.js from CDN, no
-build step. Open it directly in a browser or commit it to the repo root so the
-search tree is visible without running anything.
+Produces an ``evolve-report.html`` you can open directly in a browser or
+commit to the repo root so the search tree is visible without running
+anything.
+
+D3.js sourcing
+--------------
+By default, the report inlines a vendored copy of ``d3@7.9.0`` so the
+HTML is genuinely self-contained — works offline, in air-gapped CI, and
+when the CDN is reorganised. The vendored bundle lives at
+``src/agent_evolve/viz/_vendor/d3.v7.min.js`` and is fetched once via
+``scripts/vendor_d3.py``.
+
+If the vendored file is absent (e.g. a fresh checkout where the user
+hasn't run ``vendor_d3.py`` yet) the renderer falls back to the CDN URL
+and writes a one-line warning to stderr. The fallback keeps the report
+viewable on a connected machine without requiring the vendoring step,
+but a CI run will fail to render offline until the bundle is vendored.
 
 Features
 
@@ -17,6 +31,7 @@ Features
 from __future__ import annotations
 
 import json
+import sys
 from pathlib import Path
 from typing import Any
 
@@ -31,6 +46,15 @@ _COLORS: dict[str, str] = {
     "pending": "#d4b483",
 }
 
+# Where the vendored d3 bundle is expected to live, relative to this
+# module. ``scripts/vendor_d3.py`` writes here.
+_VENDORED_D3 = Path(__file__).resolve().parent / "_vendor" / "d3.v7.min.js"
+
+# CDN fallback. Same version as the vendored pin so behaviour is
+# identical in either source mode. Kept as a constant so a future
+# version bump touches one place.
+_D3_CDN_URL = "https://cdn.jsdelivr.net/npm/d3@7.9.0/dist/d3.min.js"
+
 
 def render_html(graph: EvolutionGraph, output_path: str | Path) -> Path:
     """Write a standalone HTML report to *output_path*."""
@@ -44,10 +68,45 @@ def _build_html(graph: EvolutionGraph) -> str:
     data = _to_payload(graph)
     data_json = _embed_safe_json(data)
     title = _html_escape(graph.title)
+    d3_tag = _d3_script_tag()
 
-    return _TEMPLATE.replace("__TITLE__", title).replace(
-        "__DATA_JSON__", data_json
-    ).replace("__COLORS__", _embed_safe_json(_COLORS))
+    return (
+        _TEMPLATE.replace("__TITLE__", title)
+        .replace("__DATA_JSON__", data_json)
+        .replace("__COLORS__", _embed_safe_json(_COLORS))
+        .replace("__D3_TAG__", d3_tag)
+    )
+
+
+def _d3_script_tag() -> str:
+    """Return the ``<script>`` tag delivering d3 to the report.
+
+    Prefers the vendored bundle (inline ``<script>...</script>``).
+    Falls back to the CDN ``<script src="...">`` form when the vendored
+    file is absent, with a stderr warning so the missing-bundle case is
+    visible in CI logs.
+    """
+    if _VENDORED_D3.exists():
+        # Inline the vendored bytes verbatim. The d3 minified bundle is
+        # standards-compliant JS that does not contain the closing
+        # sequence ``</script>``, so we can drop it into a script tag
+        # without escaping. (Verified against the pinned hash in
+        # scripts/vendor_d3.py.) The marker comment makes the source
+        # mode visible to anyone reading the rendered HTML.
+        d3_source = _VENDORED_D3.read_text(encoding="utf-8")
+        return (
+            "<script id=\"d3-vendored\" data-source=\"vendored\">\n"
+            f"{d3_source}\n"
+            "</script>"
+        )
+    print(
+        "agent-evolve: vendored d3 bundle missing at "
+        f"{_VENDORED_D3} — falling back to CDN. "
+        "Run `uv run python scripts/vendor_d3.py` once to make reports "
+        "fully self-contained.",
+        file=sys.stderr,
+    )
+    return f'<script src="{_D3_CDN_URL}" data-source="cdn"></script>'
 
 
 def _embed_safe_json(data: Any) -> str:
@@ -107,7 +166,7 @@ _TEMPLATE = r"""<!doctype html>
 <meta charset="utf-8" />
 <title>__TITLE__ — agent-evolve report</title>
 <meta name="viewport" content="width=device-width, initial-scale=1" />
-<script src="https://cdn.jsdelivr.net/npm/d3@7.9.0/dist/d3.min.js"></script>
+__D3_TAG__
 <style>
   :root {
     --bg: #0f1115;
