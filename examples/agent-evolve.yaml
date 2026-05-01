@@ -95,6 +95,33 @@ backend:
   repo: kyleyhw/agent-evolve            # used by github / gitlab backends
   root_dir: evolve-state                # used by local backend
 
+# artifact_mode controls what happens to the winning artifact at finalize
+# time.
+#   replace  — (default) the file in scope.target_files[0] is mutated in
+#              place across rounds. Winner PR diffs the canonical file.
+#              Use when the artifact IS the production code.
+#   sibling  — the canonical file is sealed under do_not_touch and a
+#              renamed sibling file is seeded from it before round 1;
+#              evolution targets the sibling. Winner PR adds a new file
+#              rather than mutating any existing one. Use when the
+#              artifact is one of many in a library catalogue (strategy
+#              classes, optimizer variants, ML model registry entries,
+#              parser dialects). Python source files only.
+# artifact_mode: sibling
+# sibling:
+#   # Optional. Names the symbol to rename. When unset, agent-evolve
+#   # auto-detects the unique top-level class/function in target_files[0];
+#   # set this when the file has multiple top-level symbols.
+#   symbol_name: Strategy
+#   # Token tokens: {original}, {ProblemId}, {Date}, {original_stem},
+#   # {problem_id}, {date}. The default produces e.g.
+#   # `StrategyMultiasset20260430` for problem_id=multiasset, today=20260430.
+#   symbol_rename_pattern: "{original}{ProblemId}{Date}"
+#   # Same tokens; default produces e.g. `strategy_multiasset_2026_04_30`.
+#   file_rename_pattern: "{original_stem}_{problem_id}_{date}"
+#   # Where to write the seeded sibling. Defaults to alongside the original.
+#   output_dir: generated/strategies/
+
 # Optional. Per-role agent assignment. Default for every role is "claude"
 # (the in-session model — Opus 4.7 / latest in Claude Code). Any other
 # value is a bare agent name; the supervisor SKILL resolves it to a CLI

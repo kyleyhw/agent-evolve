@@ -22,6 +22,7 @@ from agent_evolve.models import (
     RuntimeModeSpec,
     SafetySpec,
     ScopeSpec,
+    SiblingSpec,
 )
 
 
@@ -77,6 +78,14 @@ def _parse(raw: dict[str, Any], *, source: Path) -> ProblemSpec:
             problem.get("expected_baseline_tolerance", 0.05), source
         ),
         production_runner=_optional_str(problem.get("production_runner")),
+        artifact_mode=_parse_artifact_mode(raw.get("artifact_mode", "replace"), source),
+        sibling=_parse_sibling(
+            raw.get("sibling"),
+            artifact_mode=raw.get("artifact_mode", "replace"),
+            target_files=list(_require(scope, "target_files", list, source, ctx="scope.")),
+            eval_command=_require(problem, "eval_command", str, source, ctx="problem."),
+            source=source,
+        ),
         metrics=metrics,
         scope=ScopeSpec(
             target_files=list(_require(scope, "target_files", list, source, ctx="scope.")),
@@ -176,6 +185,92 @@ def _parse_branch_cleanup(value: Any, source: Path) -> str:
             f"{_BRANCH_CLEANUP_VALUES}; got {value!r}"
         )
     return value
+
+
+_ARTIFACT_MODE_VALUES = ("replace", "sibling")
+# Tokens the user-visible rename patterns may legally contain. Used to
+# validate that a custom pattern includes at least one variable token —
+# otherwise every run produces the same name and conflicts on second use.
+_RENAME_TOKENS = ("{original}", "{ProblemId}", "{Date}", "{original_stem}",
+                  "{problem_id}", "{date}")
+
+
+def _parse_artifact_mode(value: Any, source: Path) -> str:
+    """Validate ``artifact_mode`` is one of ``replace|sibling``."""
+    if not isinstance(value, str) or value not in _ARTIFACT_MODE_VALUES:
+        raise ManifestError(
+            f"{source}: artifact_mode must be one of {_ARTIFACT_MODE_VALUES}; "
+            f"got {value!r}"
+        )
+    return value
+
+
+def _parse_sibling(
+    value: Any,
+    *,
+    artifact_mode: Any,
+    target_files: list[Any],
+    eval_command: str,
+    source: Path,
+) -> SiblingSpec | None:
+    """Parse the optional ``sibling: {...}`` block.
+
+    Coupling rules with the rest of the manifest:
+
+    - The block is *optional* in ``replace`` mode — when present, its
+      values are stored but ignored at run time. We could reject it
+      outright, but accepting silently lets users keep a draft sibling
+      configuration in their manifest while iterating.
+    - The block is *required-but-defaultable* in ``sibling`` mode — the
+      ``SiblingSpec`` defaults handle the unset case.
+    - In ``sibling`` mode, ``scope.target_files`` must have exactly one
+      entry. The seed-step needs an unambiguous "this is the canonical
+      file we are seeding from"; multiple targets would be ambiguous.
+    - Custom rename patterns must contain at least one variable token,
+      otherwise every run produces the same name and the second run
+      collides on its first attempt.
+    """
+    if value is not None and not isinstance(value, dict):
+        raise ManifestError(
+            f"{source}: sibling must be a mapping, got {type(value).__name__}"
+        )
+
+    if artifact_mode != "sibling":
+        # Stored verbatim if present, but otherwise omitted — keeping the
+        # field None in replace mode makes it obvious in the dataclass
+        # that the rest of the system should not read it.
+        return None
+
+    block = value or {}
+    sibling = SiblingSpec(
+        symbol_name=_optional_str(block.get("symbol_name")),
+        symbol_rename_pattern=str(
+            block.get("symbol_rename_pattern", "{original}{ProblemId}{Date}")
+        ),
+        file_rename_pattern=str(
+            block.get("file_rename_pattern", "{original_stem}_{problem_id}_{date}")
+        ),
+        output_dir=_optional_str(block.get("output_dir")),
+    )
+
+    if len(target_files) != 1:
+        raise ManifestError(
+            f"{source}: artifact_mode 'sibling' requires exactly one entry "
+            f"in scope.target_files (the canonical file the sibling is "
+            f"seeded from); got {len(target_files)}"
+        )
+
+    for field_name in ("symbol_rename_pattern", "file_rename_pattern"):
+        pattern = getattr(sibling, field_name)
+        if not any(tok in pattern for tok in _RENAME_TOKENS):
+            raise ManifestError(
+                f"{source}: sibling.{field_name} must contain at least one "
+                f"variable token (one of {_RENAME_TOKENS}); got {pattern!r}. "
+                f"A static pattern produces the same name on every run and "
+                f"collides on second use."
+            )
+
+    return sibling
 
 
 def _resolve_protected_branch(safety: dict[str, Any], cwd: Path) -> str:

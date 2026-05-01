@@ -631,6 +631,77 @@ degrades gracefully rather than corrupting the run.
 
 ---
 
+## `artifact_mode`
+
+Optional. Controls what happens to the winning artifact at finalize
+time.
+
+| Value | Meaning |
+|---|---|
+| `replace` (default) | The file in `scope.target_files[0]` is mutated in place across rounds. Winner PR diffs the canonical file. Used when the artifact *is* the production code — a hot loop being optimised, a function whose only callers are tests, a benchmark you want to overwrite. Behaviour-preserving runtime-mode evolutions almost always want `replace`. |
+| `sibling` | The canonical file is automatically added to `scope.do_not_touch` and a fresh sibling file is seeded from it before round 1. Evolution mutates the sibling. The winner PR adds a *new* file rather than mutating any existing one. Used when the artifact is one of many in a library catalogue (strategy classes, optimizer variants, ML model registry entries, parser dialects) where downstream callers of the canonical name should keep their existing behaviour. **Python source files only** — non-`.py` targets raise an error. |
+
+### When to pick `sibling`
+
+Pick `sibling` if **any** of the following is true:
+
+- The class or function being evolved is exported from a library and is imported by callers outside `scope.target_files`.
+- You want to compare the original and the evolved version side-by-side at runtime.
+- You want to run evolution on the same target repeatedly over time and accumulate distinct dated artifacts.
+- The mode is `algorithm` *and* the symbol's name is part of a public API.
+
+Otherwise pick `replace`. When in doubt, ask Claude — it reads the same decision rule from the supervisor SKILL.
+
+## `sibling`
+
+Optional. Only consulted when `artifact_mode == "sibling"`. Sensible defaults if omitted.
+
+```yaml
+artifact_mode: sibling
+sibling:
+  symbol_name: Strategy
+  symbol_rename_pattern: "{original}{ProblemId}{Date}"
+  file_rename_pattern: "{original_stem}_{problem_id}_{date}"
+  output_dir: generated/strategies/
+```
+
+### `sibling.symbol_name` (string, optional)
+
+The identifier in the canonical file that gets renamed in the seeded sibling. When unset, agent-evolve auto-detects the unique top-level `class` / `def` / `async def` in `target_files[0]`. If the file has zero or multiple top-level symbols, the seed step raises and you must set this field explicitly to disambiguate.
+
+### `sibling.symbol_rename_pattern` (string, default `"{original}{ProblemId}{Date}"`)
+
+Template for the renamed symbol. Must contain at least one variable token (otherwise every run produces the same name and collides on second use). The expansion must produce a valid Python identifier; non-identifier characters in the pattern (e.g. `-`) raise at seed time.
+
+### `sibling.file_rename_pattern` (string, default `"{original_stem}_{problem_id}_{date}"`)
+
+Template for the seeded file's stem (extension is preserved from the original). Same token rules as above.
+
+### `sibling.output_dir` (string, optional)
+
+Where the seeded sibling is written. Path is relative to the repo root. When unset, the sibling is written alongside the original.
+
+### Token reference
+
+| Token | Meaning | Example |
+|---|---|---|
+| `{original}` | Original symbol name (PascalCase preserved) | `MLRegimeStrategy` |
+| `{ProblemId}` | Problem ID, PascalCase | `MultiAsset` |
+| `{Date}` | `YYYYMMDD` | `20260430` |
+| `{original_stem}` | Original file's stem | `ml_regime_strategy` |
+| `{problem_id}` | Problem ID, as-is | `multi_asset` |
+| `{date}` | `YYYY_MM_DD` | `2026_04_30` |
+
+### Eval-command coupling
+
+In sibling mode, the seed step runs an extra eval pass against the *new* symbol to verify the rename was behaviour-preserving. Your `eval_command` must be parameterisable on the symbol name — include the literal `{symbol}` token where the new symbol should appear, and `ProblemSpec.eval_command_for(name)` substitutes it:
+
+```yaml
+eval_command: "python bench.py --strategy {symbol}"
+```
+
+When `eval_command` does not contain `{symbol}`, the seed step still runs but the eval will benchmark the *original* symbol (since that is what the unmodified command resolves). The seed step's baseline-validation pass detects the disagreement (the rename produced different metrics from the original) and aborts before round 1 — so the failure mode is loud rather than silent, but you waste one eval pass figuring out you need to parameterise.
+
 ## `version`
 
 Optional. Currently only `version: 1` is recognised. The parser ignores

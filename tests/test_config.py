@@ -432,6 +432,152 @@ def test_run_ablation_report_can_be_disabled(tmp_path):
     assert spec.safety.run_ablation_report is False
 
 
+def test_artifact_mode_defaults_to_replace(tmp_path):
+    """No ``artifact_mode`` field → default ``"replace"`` (current behaviour)."""
+    manifest = tmp_path / "agent-evolve.yaml"
+    manifest.write_text(textwrap.dedent("""
+        problem:
+          description: x
+          mode: algorithm
+          eval_command: echo
+          metrics:
+            - {name: m, optimise: minimize}
+        scope: {target_files: [a]}
+        backend: {type: local}
+    """))
+    spec = load_manifest(manifest)
+    assert spec.artifact_mode == "replace"
+    assert spec.sibling is None
+
+
+def test_artifact_mode_sibling_uses_default_sibling_block(tmp_path):
+    """``artifact_mode: sibling`` without an explicit ``sibling:`` block populates defaults."""
+    manifest = tmp_path / "agent-evolve.yaml"
+    manifest.write_text(textwrap.dedent("""
+        problem:
+          description: x
+          mode: algorithm
+          eval_command: echo
+          metrics:
+            - {name: m, optimise: minimize}
+        scope: {target_files: [a.py]}
+        backend: {type: local}
+        artifact_mode: sibling
+    """))
+    spec = load_manifest(manifest)
+    assert spec.artifact_mode == "sibling"
+    assert spec.sibling is not None
+    assert spec.sibling.symbol_rename_pattern == "{original}{ProblemId}{Date}"
+    assert spec.sibling.file_rename_pattern == "{original_stem}_{problem_id}_{date}"
+    assert spec.sibling.symbol_name is None
+    assert spec.sibling.output_dir is None
+
+
+def test_artifact_mode_sibling_with_custom_block(tmp_path):
+    """Custom ``sibling`` block overrides the defaults verbatim."""
+    manifest = tmp_path / "agent-evolve.yaml"
+    manifest.write_text(textwrap.dedent("""
+        problem:
+          description: x
+          mode: algorithm
+          eval_command: "python bench.py --strategy {symbol}"
+          metrics:
+            - {name: m, optimise: minimize}
+        scope: {target_files: [src/strat.py]}
+        backend: {type: local}
+        artifact_mode: sibling
+        sibling:
+          symbol_name: Strategy
+          symbol_rename_pattern: "{original}_v{date}"
+          file_rename_pattern: "{original_stem}_v{date}"
+          output_dir: generated/
+    """))
+    spec = load_manifest(manifest)
+    assert spec.sibling.symbol_name == "Strategy"
+    assert spec.sibling.symbol_rename_pattern == "{original}_v{date}"
+    assert spec.sibling.file_rename_pattern == "{original_stem}_v{date}"
+    assert spec.sibling.output_dir == "generated/"
+
+
+def test_artifact_mode_invalid_value_rejected(tmp_path):
+    manifest = tmp_path / "agent-evolve.yaml"
+    manifest.write_text(textwrap.dedent("""
+        problem:
+          description: x
+          mode: algorithm
+          eval_command: echo
+          metrics:
+            - {name: m, optimise: minimize}
+        scope: {target_files: [a]}
+        backend: {type: local}
+        artifact_mode: clone
+    """))
+    with pytest.raises(ManifestError, match="artifact_mode must be one of"):
+        load_manifest(manifest)
+
+
+def test_artifact_mode_sibling_requires_single_target_file(tmp_path):
+    """Sibling mode is unambiguous only when ``target_files`` has one entry."""
+    manifest = tmp_path / "agent-evolve.yaml"
+    manifest.write_text(textwrap.dedent("""
+        problem:
+          description: x
+          mode: algorithm
+          eval_command: echo
+          metrics:
+            - {name: m, optimise: minimize}
+        scope:
+          target_files:
+            - a.py
+            - b.py
+        backend: {type: local}
+        artifact_mode: sibling
+    """))
+    with pytest.raises(ManifestError, match="exactly one entry"):
+        load_manifest(manifest)
+
+
+def test_artifact_mode_sibling_rejects_static_rename_pattern(tmp_path):
+    """A pattern with no variable token would collide on second use → rejected."""
+    manifest = tmp_path / "agent-evolve.yaml"
+    manifest.write_text(textwrap.dedent("""
+        problem:
+          description: x
+          mode: algorithm
+          eval_command: echo
+          metrics:
+            - {name: m, optimise: minimize}
+        scope: {target_files: [a.py]}
+        backend: {type: local}
+        artifact_mode: sibling
+        sibling:
+          symbol_rename_pattern: "FixedName"
+    """))
+    with pytest.raises(ManifestError, match="must contain at least one"):
+        load_manifest(manifest)
+
+
+def test_artifact_mode_replace_ignores_sibling_block(tmp_path):
+    """A leftover ``sibling:`` block under ``artifact_mode: replace`` is ignored."""
+    manifest = tmp_path / "agent-evolve.yaml"
+    manifest.write_text(textwrap.dedent("""
+        problem:
+          description: x
+          mode: algorithm
+          eval_command: echo
+          metrics:
+            - {name: m, optimise: minimize}
+        scope: {target_files: [a.py]}
+        backend: {type: local}
+        artifact_mode: replace
+        sibling:
+          symbol_name: Whatever
+    """))
+    spec = load_manifest(manifest)
+    assert spec.artifact_mode == "replace"
+    assert spec.sibling is None  # Block silently dropped in replace mode
+
+
 def test_protected_branch_auto_detected_when_yaml_omits_field(tmp_path, monkeypatch):
     """Omitting ``safety.protected_branch`` triggers ``git_utils.detect_default_branch``.
 
