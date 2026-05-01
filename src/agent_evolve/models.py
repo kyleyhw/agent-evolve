@@ -21,6 +21,7 @@ EvolveMode = Literal["algorithm", "runtime"]
 OperatorName = Literal["mutate", "crossover", "explore"]
 CandidateStatus = Literal["pending", "scored", "reviewing", "approved", "rejected", "pruned"]
 ReviewerVerdictLabel = Literal["APPROVE", "REQUEST_CHANGES", "REJECT"]
+ArtifactMode = Literal["replace", "sibling"]
 
 
 class OptimiseDirection(str, Enum):
@@ -77,6 +78,33 @@ class ScopeSpec:
     target_files: list[str]
     do_not_touch: list[str] = field(default_factory=list)
     max_diff_files: int | None = None
+
+
+@dataclass(frozen=True)
+class SiblingSpec:
+    """Per-run options for ``artifact_mode: sibling``.
+
+    All fields default to sensible values so a minimal manifest can opt
+    into sibling mode with a one-line ``artifact_mode: sibling``. The
+    rename patterns use template tokens documented in the SKILL — see
+    :func:`agent_evolve.artifact.expand_template` for the canonical
+    list.
+
+    ``symbol_name`` is the identifier in the canonical file that gets
+    renamed in the seeded sibling. When ``None``, :mod:`agent_evolve.artifact`
+    auto-detects the unique top-level class or function in the target
+    file; if there are zero or multiple top-level symbols, it raises
+    and the user must set this field explicitly.
+
+    ``output_dir`` is the directory the seeded file is written to. When
+    ``None``, the sibling is written alongside the original. Path is
+    interpreted relative to the repo root.
+    """
+
+    symbol_name: str | None = None
+    symbol_rename_pattern: str = "{original}{ProblemId}{Date}"
+    file_rename_pattern: str = "{original_stem}_{problem_id}_{date}"
+    output_dir: str | None = None
 
 
 @dataclass(frozen=True)
@@ -241,11 +269,27 @@ class ProblemSpec:
     expected_baseline: dict[str, float] | None = None
     expected_baseline_tolerance: float = 0.05
     production_runner: str | None = None
+    artifact_mode: ArtifactMode = "replace"
+    sibling: SiblingSpec | None = None
     version: int = 1
 
     def primary_metric(self) -> Metric:
         """Convenience: the metric flagged ``primary=True`` (or first metric)."""
         return primary_metric(self.metrics)
+
+    def eval_command_for(self, symbol_name: str) -> str:
+        """Return ``eval_command`` with the literal ``{symbol}`` token substituted.
+
+        Used by the sibling-mode seed-step so the eval can be aimed at
+        the renamed symbol rather than the original. When the user's
+        ``eval_command`` does not include ``{symbol}``, the command is
+        returned verbatim — the eval is symbol-agnostic, presumably
+        because it imports the canonical name. That case still works
+        in ``replace`` mode (which never calls this method) but is
+        almost certainly wrong in ``sibling`` mode; the seed-step's
+        baseline-validation pass detects the disagreement and aborts.
+        """
+        return self.eval_command.replace("{symbol}", symbol_name)
 
 
 @dataclass
