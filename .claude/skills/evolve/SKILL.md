@@ -162,6 +162,113 @@ proceeding: a missing baseline means the reviewer cannot evaluate
 "metrics_improved" honestly, and you should ask whether to relax the
 metric to `test_pass_rate >= 1.0` only.
 
+## Phase 0c — Artifact mode (replace vs sibling)
+
+Before round 1 dispatches, decide **what should happen to the winning
+artifact at finalize time**. Two modes, declared by `spec.artifact_mode`:
+
+- **`replace`** (default) — the file in `scope.target_files[0]` is
+  mutated in place across rounds. The winner PR diffs the canonical
+  file. Use this when *the artifact IS the production code*: a hot
+  loop being optimised, a function whose only callers are tests, a
+  benchmark you want to overwrite. Behaviour-preserving runtime-mode
+  evolutions (`spec.mode == "runtime"`) almost always want `replace`.
+
+- **`sibling`** — the canonical file is sealed under `do_not_touch`,
+  and a fresh sibling file is seeded from it before round 1. Evolution
+  mutates the sibling. The winner PR adds a *new* file rather than
+  mutating any existing one. Use this when *the artifact is one of
+  many in a library catalogue* (strategy classes, optimizer variants,
+  ML model registry entries, parser dialects) — anywhere there are
+  downstream callers of the canonical name that should keep their
+  existing behaviour.
+
+### Decision rule
+
+Pick `sibling` if **any** of the following is true:
+- The class/function being evolved is exported from a library and is
+  imported by callers outside `scope.target_files`.
+- The user wants to compare the original and the evolved version side
+  by side at runtime.
+- The user wants to run evolution on the same target repeatedly over
+  time and accumulate distinct dated artifacts.
+- The mode is `algorithm` *and* the symbol's name is part of a public
+  API.
+
+Otherwise pick `replace`. When in doubt, ask once.
+
+### Manifest schema
+
+```yaml
+artifact_mode: replace          # default — current in-place behaviour
+# OR
+artifact_mode: sibling
+sibling:
+  # Pattern for the new symbol's name. Tokens: {original}, {ProblemId},
+  # {Date}. Default: "{original}{ProblemId}{Date}". Must produce a
+  # unique identifier per run.
+  symbol_rename_pattern: "{original}{ProblemId}{Date}"
+  # Pattern for the new file's name (without extension). Tokens:
+  # {original_stem}, {problem_id}, {date}. Default produces e.g.
+  # "ml_regime_strategy_multiasset_2026_04_30".
+  file_rename_pattern: "{original_stem}_{problem_id}_{date}"
+  # Where the seeded file lives. Default: alongside the original.
+  output_dir: ""
+```
+
+Token semantics: `{original}` = original symbol's name (e.g.
+`MLRegimeStrategy`); `{ProblemId}` = run's problem-id in PascalCase
+(e.g. `Multiasset`); `{Date}` = run start date as `YYYYMMDD` (e.g.
+`20260430`); `{original_stem}` = original file's stem; `{problem_id}` =
+problem-id as-is; `{date}` = `YYYY_MM_DD`.
+
+### Seed step (sibling mode only)
+
+Run this between Phase 0b and round 1 of Phase A:
+
+```python
+from agent_evolve.artifact import seed_sibling
+
+if spec.artifact_mode == "sibling":
+    seed = seed_sibling(spec)              # writes the new file, renames symbol
+    spec.scope.target_files = [seed.new_path]
+    spec.scope.do_not_touch = list(spec.scope.do_not_touch) + [seed.original_path]
+    # Phase 0b baseline must reproduce against the seeded file. Re-run
+    # the eval with --strategy <new_symbol> (or whatever the eval CLI
+    # uses) and compare to the original baseline within tolerance.
+    seed_eval = run_eval(spec.eval_command_for(seed.new_symbol), cwd=baseline_cwd)
+    seed_check = validate_baseline(
+        measured=seed_eval.metrics,
+        expected=baseline_eval.metrics,
+        tolerance=spec.expected_baseline_tolerance,
+    )
+    if not seed_check.matches:
+        raise RuntimeError(
+            f"sibling seed disagrees with original baseline beyond tolerance:\n"
+            f"{seed_check.message}\n"
+            f"this means the symbol rename was not behaviour-preserving — abort."
+        )
+```
+
+The seed must reproduce the original's metrics within tolerance. If it
+does not, the rename was not behaviour-preserving (e.g. a self-reference
+to the class name was missed) — abort before burning the search budget.
+
+### Reviewer impact
+
+Reviewers receive the same scope-violation rule as in `replace` mode,
+but in `sibling` mode the canonical file is automatically in
+`do_not_touch` — so a candidate that mutates the original (e.g. by
+re-importing it and patching) is rejected without the reviewer needing
+to know which mode is active.
+
+### Finalize impact
+
+At finalize time, the winner PR's diff in `sibling` mode is "added 1
+new file"; in `replace` mode it is "modified 1 existing file". Both
+modes still target `safety.protected_branch`; both are still left open
+for human merge.
+
 ## External agent dispatch
 
 The manifest's optional `agents:` block names *which* agent fills each
