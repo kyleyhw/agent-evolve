@@ -51,6 +51,8 @@ equivalence checking, and an interactive D3.js evolution graph.
 
 Open Claude Code in any repo and tell Claude:
 
+**Prompt for Claude**
+
 ```text
 Install agent-evolve from https://github.com/kyleyhw/agent-evolve
 ```
@@ -86,6 +88,8 @@ overwrite existing skill links.
 Open any repo in Claude Code and type `/e` — you should see `/evolve` in
 the completion list. If not, ask Claude:
 
+**Prompt for Claude**
+
 ```text
 /evolve is not registering from ~/.claude/skills/. Diagnose.
 ```
@@ -102,6 +106,8 @@ point Claude at your own project.
 ### A. See it work — run the example
 
 Inside the `agent-evolve` repo, tell Claude:
+
+**Prompt for Claude**
 
 ```text
 Run examples/demo_run.py and show me the result.
@@ -128,6 +134,8 @@ modify the example to target your own function.
 Open your target repo in Claude Code (with agent-evolve installed per the
 steps above) and just say what you want:
 
+**Prompt for Claude**
+
 ```text
 Evolve src/pricing/calculator.py for runtime. Keep the pricing tests green.
 ```
@@ -147,6 +155,8 @@ supported pair. Two natural shapes:
 **Single non-default agent.** Use one model for the entire explorer or
 reviewer role:
 
+**Prompt for Claude**
+
 ```text
 Evolve src/pricing/calculator.py for runtime. Use Gemini as the reviewer. Keep the pricing tests green.
 ```
@@ -155,6 +165,8 @@ Evolve src/pricing/calculator.py for runtime. Use Gemini as the reviewer. Keep t
 across an ensemble — slot 1 → Claude, slot 2 → Gemini, slot 3 → Claude,
 and so on, mixing exploration heuristics from both model families inside
 each round:
+
+**Prompt for Claude**
 
 ```text
 Evolve src/pricing/calculator.py for runtime. Use Gemini for some exploration agents alongside Claude. Keep the pricing tests green.
@@ -187,6 +199,8 @@ against `main` for you to review and merge — it will not merge itself.
 to `agent-evolve.yaml` and invoke `/evolve agent-evolve.yaml`. Claude can
 do this for you:
 
+**Prompt for Claude**
+
 ```text
 Save the spec you just inferred as agent-evolve.yaml so I can re-run it in CI.
 ```
@@ -196,6 +210,8 @@ template and edit in place. The full field-by-field reference can be
 found at [`docs/manifest.md`](docs/manifest.md).
 
 **After the run:**
+
+**Prompt for Claude**
 
 ```text
 Summarise the evolution run for me. What did each operator try, and why did the winner beat its parents?
@@ -215,6 +231,8 @@ When you need a function to be fast and the current behaviour is
 authoritative. Claude explores memoisation, vectorisation, smarter data
 structures, algorithmic rewrites — and the equivalence checker rejects any
 candidate that disagrees with the baseline on 500 random inputs.
+
+**Prompt for Claude**
 
 ```text
 Optimise src/pricing/calculator.py for runtime. Treat the current behaviour as authoritative — any candidate that fails the equivalence check at 500 samples is rejected.
@@ -243,6 +261,8 @@ strategies, hyperparameter search, heuristic tuning, any scenario where
 "the right answer" is defined by a benchmark and not by a reference
 implementation.
 
+**Prompt for Claude**
+
 ```text
 Evolve src/strategies/momentum.py to maximize Sharpe ratio and minimize max drawdown on the 2020-2024 backtest. Keep win rate above 40% as a hard constraint. Don't touch src/strategies/risk.py.
 ```
@@ -268,6 +288,8 @@ use case and what the Pareto pruning strategy was built for.
 When a test suite is red and you want Claude to iterate until it's green.
 The reviewer checklist's hard constraint (`test_pass_rate minimum: 1.0`)
 rejects any candidate that doesn't hit 100%.
+
+**Prompt for Claude**
 
 ```text
 src/graphs/dijkstra.py is failing three tests in tests/graphs/. Run the evolutionary loop with test_pass_rate as the only metric (minimum 1.0). Don't modify tests or anything outside src/graphs/.
@@ -298,6 +320,8 @@ the metric is some complexity measure. Claude mutates toward simpler
 control flow, shorter functions, fewer nested conditionals — and the
 equivalence check stops it from "simplifying" by breaking behaviour.
 
+**Prompt for Claude**
+
 ```text
 Refactor src/billing/invoice_processor.py for readability. Treat the current behaviour as authoritative. Optimise for cyclomatic complexity via radon, and keep all existing tests passing.
 ```
@@ -325,6 +349,8 @@ manifest in one of these shapes, then drives the loop.
 ## Using the GitHub backend
 
 Tell Claude to switch:
+
+**Prompt for Claude**
 
 ```text
 Change the manifest's backend.type to github with repo: kyleyhw/my-project, and set GH_TOKEN from my .env.
@@ -493,6 +519,8 @@ protected branch during `create_problem()`.
 ## Running the tests
 
 Tell Claude:
+
+**Prompt for Claude**
 
 ```text
 Run the test suite.
