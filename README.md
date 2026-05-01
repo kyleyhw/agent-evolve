@@ -51,7 +51,9 @@ equivalence checking, and an interactive D3.js evolution graph.
 
 Open Claude Code in any repo and tell Claude:
 
-> "Install agent-evolve from https://github.com/kyleyhw/agent-evolve"
+```text
+Install agent-evolve from https://github.com/kyleyhw/agent-evolve
+```
 
 Claude clones the repo into a sensible location, runs
 [`install.py`](install.py), and verifies the three skills are registered.
@@ -84,7 +86,9 @@ overwrite existing skill links.
 Open any repo in Claude Code and type `/e` — you should see `/evolve` in
 the completion list. If not, ask Claude:
 
-> "`/evolve` is not registering from `~/.claude/skills/`. Diagnose."
+```text
+/evolve is not registering from ~/.claude/skills/. Diagnose.
+```
 
 See [`docs/skills.md`](docs/skills.md) for the full registration guide.
 
@@ -99,7 +103,9 @@ point Claude at your own project.
 
 Inside the `agent-evolve` repo, tell Claude:
 
-> "Run `examples/demo_run.py` and show me the result."
+```text
+Run examples/demo_run.py and show me the result.
+```
 
 Or directly:
 
@@ -122,8 +128,9 @@ modify the example to target your own function.
 Open your target repo in Claude Code (with agent-evolve installed per the
 steps above) and just say what you want:
 
-> "Evolve `src/pricing/calculator.py` for runtime. Keep the pricing tests
->  green."
+```text
+Evolve src/pricing/calculator.py for runtime. Keep the pricing tests green.
+```
 
 Claude matches this to `/evolve` automatically (or you can type it
 directly). The skill then infers the spec — mode, metrics, eval command,
@@ -140,16 +147,18 @@ supported pair. Two natural shapes:
 **Single non-default agent.** Use one model for the entire explorer or
 reviewer role:
 
-> "Evolve `src/pricing/calculator.py` for runtime. Use Gemini as the
->  reviewer. Keep the pricing tests green."
+```text
+Evolve src/pricing/calculator.py for runtime. Use Gemini as the reviewer. Keep the pricing tests green.
+```
 
 **Ensemble across both.** Distribute the explorer slots round-robin
 across an ensemble — slot 1 → Claude, slot 2 → Gemini, slot 3 → Claude,
 and so on, mixing exploration heuristics from both model families inside
 each round:
 
-> "Evolve `src/pricing/calculator.py` for runtime. Use Gemini for some
->  exploration agents alongside Claude. Keep the pricing tests green."
+```text
+Evolve src/pricing/calculator.py for runtime. Use Gemini for some exploration agents alongside Claude. Keep the pricing tests green.
+```
 
 Claude reads the second prompt as `agents.explorer: [claude, gemini]`
 and round-robin's the slots; reviewer stays Claude. The corresponding
@@ -178,8 +187,9 @@ against `main` for you to review and merge — it will not merge itself.
 to `agent-evolve.yaml` and invoke `/evolve agent-evolve.yaml`. Claude can
 do this for you:
 
-> "Save the spec you just inferred as `agent-evolve.yaml` so I can
->  re-run it in CI."
+```text
+Save the spec you just inferred as agent-evolve.yaml so I can re-run it in CI.
+```
 
 Or copy [`examples/agent-evolve.yaml`](examples/agent-evolve.yaml) as a
 template and edit in place. The full field-by-field reference can be
@@ -187,8 +197,9 @@ found at [`docs/manifest.md`](docs/manifest.md).
 
 **After the run:**
 
-> "Summarise the evolution run for me. What did each operator try, and why
->  did the winner beat its parents?"
+```text
+Summarise the evolution run for me. What did each operator try, and why did the winner beat its parents?
+```
 
 is a reasonable follow-up to ask Claude before you hit merge.
 
@@ -205,9 +216,9 @@ authoritative. Claude explores memoisation, vectorisation, smarter data
 structures, algorithmic rewrites — and the equivalence checker rejects any
 candidate that disagrees with the baseline on 500 random inputs.
 
-> "Optimise `src/pricing/calculator.py` for runtime. Treat the current
->  behaviour as authoritative — any candidate that fails the equivalence
->  check at 500 samples is rejected."
+```text
+Optimise src/pricing/calculator.py for runtime. Treat the current behaviour as authoritative — any candidate that fails the equivalence check at 500 samples is rejected.
+```
 
 ```yaml
 problem:
@@ -232,9 +243,9 @@ strategies, hyperparameter search, heuristic tuning, any scenario where
 "the right answer" is defined by a benchmark and not by a reference
 implementation.
 
-> "Evolve `src/strategies/momentum.py` to maximize Sharpe ratio and
->  minimize max drawdown on the 2020-2024 backtest. Keep win rate above
->  40% as a hard constraint. Don't touch `src/strategies/risk.py`."
+```text
+Evolve src/strategies/momentum.py to maximize Sharpe ratio and minimize max drawdown on the 2020-2024 backtest. Keep win rate above 40% as a hard constraint. Don't touch src/strategies/risk.py.
+```
 
 ```yaml
 problem:
@@ -258,9 +269,9 @@ When a test suite is red and you want Claude to iterate until it's green.
 The reviewer checklist's hard constraint (`test_pass_rate minimum: 1.0`)
 rejects any candidate that doesn't hit 100%.
 
-> "`src/graphs/dijkstra.py` is failing three tests in `tests/graphs/`. Run
->  the evolutionary loop with `test_pass_rate` as the only metric
->  (minimum 1.0). Don't modify tests or anything outside `src/graphs/`."
+```text
+src/graphs/dijkstra.py is failing three tests in tests/graphs/. Run the evolutionary loop with test_pass_rate as the only metric (minimum 1.0). Don't modify tests or anything outside src/graphs/.
+```
 
 ```yaml
 problem:
@@ -287,9 +298,9 @@ the metric is some complexity measure. Claude mutates toward simpler
 control flow, shorter functions, fewer nested conditionals — and the
 equivalence check stops it from "simplifying" by breaking behaviour.
 
-> "Refactor `src/billing/invoice_processor.py` for readability. Treat the
->  current behaviour as authoritative. Optimise for cyclomatic complexity
->  via radon, and keep all existing tests passing."
+```text
+Refactor src/billing/invoice_processor.py for readability. Treat the current behaviour as authoritative. Optimise for cyclomatic complexity via radon, and keep all existing tests passing.
+```
 
 ```yaml
 problem:
@@ -315,8 +326,9 @@ manifest in one of these shapes, then drives the loop.
 
 Tell Claude to switch:
 
-> "Change the manifest's `backend.type` to `github` with `repo:
->  kyleyhw/my-project`, and set `GH_TOKEN` from my `.env`."
+```text
+Change the manifest's backend.type to github with repo: kyleyhw/my-project, and set GH_TOKEN from my .env.
+```
 
 Claude will update the YAML and confirm the token is readable. With the
 GitHub backend selected, `create_problem()` opens an evolutionary Issue and
@@ -482,7 +494,9 @@ protected branch during `create_problem()`.
 
 Tell Claude:
 
-> "Run the test suite."
+```text
+Run the test suite.
+```
 
 Or directly:
 
