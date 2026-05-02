@@ -40,7 +40,7 @@ scope:
   max_diff_files: 3
 
 evolution:
-  rounds: 5
+  rounds: 4
   candidates_per_round: 3
   operators: [mutate, crossover, explore]
   prune_strategy: pareto                # pareto | top_k
@@ -90,12 +90,14 @@ Human-readable one-liner. Shown in the Issue body (GitHub backend), the PR
 titles, and the evolution graph header. No functional effect; anchors the
 search in the evolution log so you remember *why* the run happened.
 
-### `problem.mode` (string, default `"algorithm"`)
+### `problem.mode` (string, default `"runtime"`)
 
 | Value | Meaning |
 |---|---|
-| `algorithm` | Behaviour is allowed to change. Used for metric optimisation where the "right answer" is a number, not a reference implementation (e.g. Sharpe ratio, win rate, fitting parameters). |
-| `runtime` | Behaviour must stay the same. The equivalence checker compares the baseline and candidate on property-based inputs; the reviewer rejects any candidate that disagrees. Used for "make it faster / cleaner without changing what it does". |
+| `runtime` (default) | Behaviour must stay the same. The equivalence checker compares the baseline and candidate on property-based inputs; the reviewer rejects any candidate that disagrees. Used for "make it faster / cleaner without changing what it does". This is the default because it requires no interpretation of intent — the existing behaviour is the spec. |
+| `algorithm` | Behaviour is allowed to change. Used for metric optimisation where the "right answer" is a number, not a reference implementation (e.g. Sharpe ratio, win rate, fitting parameters). Requires the manifest to define what improvement looks like via `metrics`, since the existing behaviour is no longer authoritative. |
+
+**Coupling with `runtime_mode.equivalence_check`.** A minimal manifest using the `runtime` default also picks up the default `equivalence_check: "required"`. That works cleanly for pure functions but fails when the target has hard-to-mock dependencies (DB, HTTP, global state) — the eval will report "equivalence check could not run" and the reviewer will REJECT. If your target is non-mockable, set `runtime_mode.equivalence_check: "optional"` or `"disabled"` (see the [`runtime_mode`](#runtime_mode) section below).
 
 ### `problem.eval_command` (string, **required**)
 
@@ -365,10 +367,12 @@ max_diff_files: 3
 Optional. Controls the shape of the search itself. Sensible defaults
 if omitted.
 
-### `evolution.rounds` (int, default `5`)
+### `evolution.rounds` (int, default `4`)
 
 How many rounds of supervisor dispatch to run before `finalize()`. Each
-round produces up to `candidates_per_round` candidates.
+round produces up to `candidates_per_round` candidates. The default
+gives 4 × 3 = 12 candidate slots — enough for the search to explore a
+few directions and a few refinements without running indefinitely.
 
 ### `evolution.candidates_per_round` (int, default `3`)
 
@@ -834,7 +838,7 @@ want and reword.
 
 #### `evolution.rounds` and `evolution.candidates_per_round`
 
-> "Run 8 rounds instead of 5, with 4 candidates per round."
+> "Run 8 rounds instead of 4, with 4 candidates per round."
 
 #### `evolution.operators`
 

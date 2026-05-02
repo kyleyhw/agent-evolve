@@ -70,7 +70,7 @@ def _parse(raw: dict[str, Any], *, source: Path) -> ProblemSpec:
     return ProblemSpec(
         version=raw.get("version", 1),
         description=_require(problem, "description", str, source, ctx="problem."),
-        mode=problem.get("mode", "algorithm"),
+        mode=problem.get("mode", "runtime"),
         eval_command=_require(problem, "eval_command", str, source, ctx="problem."),
         eval_cwd=_optional_str(problem.get("eval_cwd")),
         expected_baseline=_parse_expected_baseline(problem.get("expected_baseline"), source),
@@ -93,7 +93,7 @@ def _parse(raw: dict[str, Any], *, source: Path) -> ProblemSpec:
             max_diff_files=scope.get("max_diff_files"),
         ),
         evolution=EvolutionSpec(
-            rounds=int(evolution.get("rounds", 5)),
+            rounds=int(evolution.get("rounds", 4)),
             candidates_per_round=int(evolution.get("candidates_per_round", 3)),
             operators=list(evolution.get("operators") or ["mutate", "crossover", "explore"]),
             prune_strategy=evolution.get("prune_strategy", "pareto"),
