@@ -57,7 +57,7 @@ spec = ProblemSpec(
     eval_command="<figured out below>",
     metrics=[ ... ],
     scope=ScopeSpec(target_files=[...], do_not_touch=[...]),
-    evolution=EvolutionSpec(),              # defaults: 5 rounds, 3 candidates
+    evolution=EvolutionSpec(),              # defaults: 4 rounds, 3 candidates
     runtime_mode=RuntimeModeSpec(),         # equivalence required by default
     # detect_default_branch() inspects origin/HEAD then the current branch
     # so SafetySpec picks up whatever the target repo actually calls its

@@ -341,7 +341,7 @@ scope:
   max_diff_files: 3
 
 evolution:
-  rounds: 5
+  rounds: 4
   candidates_per_round: 3
   operators: [mutate, crossover, explore]
   prune_strategy: pareto

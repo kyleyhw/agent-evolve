@@ -109,7 +109,7 @@ class SiblingSpec:
 
 @dataclass(frozen=True)
 class EvolutionSpec:
-    rounds: int = 5
+    rounds: int = 4
     candidates_per_round: int = 3
     operators: list[OperatorName] = field(default_factory=lambda: ["mutate", "crossover", "explore"])
     prune_strategy: Literal["pareto", "top_k"] = "pareto"
