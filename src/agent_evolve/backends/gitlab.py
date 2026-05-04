@@ -27,11 +27,15 @@ from agent_evolve.backends.base import EvolveBackend
 from agent_evolve.backends.github import (
     EVOLVE_STATE_OPEN,
     EVOLVE_STATE_CLOSE,
+    RUN_METADATA_OPEN,
+    RUN_METADATA_CLOSE,
+    _now_iso,
     _parse_candidate,
     _render_issue_body,
     _render_pr_body,
     _render_verdict_comment,
 )
+from agent_evolve.git_utils import current_sha
 from agent_evolve.models import Candidate, EquivalenceReport, ProblemSpec, ReviewerVerdict
 
 
@@ -56,7 +60,15 @@ class GitLabBackend(EvolveBackend):
         self.problem_id: str | None = None
 
     def create_problem(self, spec: ProblemSpec) -> str:
-        body = _render_issue_body(spec, trait_matrix=[], mermaid="", report_url=None)
+        run_metadata = {
+            "run_started_at": _now_iso(),
+            "run_completed_at": None,
+            "protected_branch_sha": current_sha(spec.safety.protected_branch),
+        }
+        body = _render_issue_body(
+            spec, trait_matrix=[], mermaid="", report_url=None,
+            run_metadata=run_metadata,
+        )
         issue = self._api("POST", f"/projects/{self._project}/issues", data={
             "title": f"[Evolve] {spec.description}",
             "description": body,
@@ -156,6 +168,17 @@ class GitLabBackend(EvolveBackend):
             "description": _render_final_body(winner, self.problem_id, self.spec),
             "labels": "evolve-winner",
         })
+        # Stamp run_completed_at into the existing RUN_METADATA block.
+        # Mirrors the GitHub backend; ``_refresh_issue`` rewrites the
+        # description but preserves the existing block by default — we
+        # override here with the closed-out metadata.
+        current = self._api("GET", f"/projects/{self._project}/issues/{self.problem_id}")
+        existing = current.get("description") or ""
+        existing_meta = _extract(existing, RUN_METADATA_OPEN, RUN_METADATA_CLOSE)
+        meta = json.loads(existing_meta) if existing_meta else {}
+        meta["run_completed_at"] = _now_iso()
+        self._refresh_issue(run_metadata=meta)
+
         self._comment_issue(f"Finalised. Winner is !{winner_id}. Awaiting human approval on !{final['iid']}.")
         return final["web_url"]
 
@@ -217,15 +240,24 @@ class GitLabBackend(EvolveBackend):
         self._api("POST", f"/projects/{self._project}/issues/{self.problem_id}/notes",
                   data={"body": body})
 
-    def _refresh_issue(self, *, mermaid: str | None = None, report_url: str | None = None) -> None:
+    def _refresh_issue(
+        self,
+        *,
+        mermaid: str | None = None,
+        report_url: str | None = None,
+        run_metadata: dict[str, Any] | None = None,
+    ) -> None:
         self._ensure_problem()
         leaderboard = self.get_leaderboard()
         current = self._api("GET", f"/projects/{self._project}/issues/{self.problem_id}")
         existing = current.get("description") or ""
         existing_mermaid = mermaid if mermaid is not None else _extract(existing, "<!-- EVOLVE_GRAPH -->", "<!-- /EVOLVE_GRAPH -->")
+        if run_metadata is None:
+            existing_meta = _extract(existing, RUN_METADATA_OPEN, RUN_METADATA_CLOSE)
+            run_metadata = json.loads(existing_meta) if existing_meta else None
         body = _render_issue_body(
             self.spec, trait_matrix=leaderboard, mermaid=existing_mermaid or "",
-            report_url=report_url,
+            report_url=report_url, run_metadata=run_metadata,
         )
         self._api("PUT", f"/projects/{self._project}/issues/{self.problem_id}", data={"description": body})
 

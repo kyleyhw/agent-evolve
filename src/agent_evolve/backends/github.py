@@ -31,6 +31,7 @@ import re
 from typing import TYPE_CHECKING, Any
 
 from agent_evolve.backends.base import EvolveBackend, MergeNotPermittedError
+from agent_evolve.git_utils import current_sha
 from agent_evolve.models import Candidate, EquivalenceReport, ProblemSpec, ReviewerVerdict
 
 if TYPE_CHECKING:  # pragma: no cover
@@ -46,6 +47,8 @@ TRAIT_MATRIX_OPEN = "<!-- TRAIT_MATRIX -->"
 TRAIT_MATRIX_CLOSE = "<!-- /TRAIT_MATRIX -->"
 GRAPH_OPEN = "<!-- EVOLVE_GRAPH -->"
 GRAPH_CLOSE = "<!-- /EVOLVE_GRAPH -->"
+RUN_METADATA_OPEN = "<!-- RUN_METADATA -->"
+RUN_METADATA_CLOSE = "<!-- /RUN_METADATA -->"
 
 
 class GitHubBackend(EvolveBackend):
@@ -76,7 +79,19 @@ class GitHubBackend(EvolveBackend):
         self.problem_id: str | None = None
 
     def create_problem(self, spec: ProblemSpec) -> str:
-        body = _render_issue_body(spec, trait_matrix=[], mermaid="", report_url=None)
+        run_metadata = {
+            "run_started_at": _now_iso(),
+            "run_completed_at": None,
+            # Best-effort SHA capture — ``current_sha`` returns ``None``
+            # if git is unavailable or the branch does not exist locally
+            # (e.g. the supervisor is running in a checkout that does
+            # not have the protected branch checked out).
+            "protected_branch_sha": current_sha(spec.safety.protected_branch),
+        }
+        body = _render_issue_body(
+            spec, trait_matrix=[], mermaid="", report_url=None,
+            run_metadata=run_metadata,
+        )
         issue = self._repo.create_issue(
             title=f"[Evolve] {spec.description}",
             body=body,
@@ -207,6 +222,17 @@ class GitHubBackend(EvolveBackend):
                     f"Reviewers requested: {', '.join(self.spec.safety.final_pr_reviewers)}"
                 )
 
+        # Stamp run_completed_at into the existing RUN_METADATA block on
+        # the Issue body. ``_refresh_issue_body`` rewrites the whole body
+        # but preserves the existing block by default; we override here
+        # with the closed-out metadata.
+        existing_meta = _extract_block(
+            self._issue.body or "", RUN_METADATA_OPEN, RUN_METADATA_CLOSE
+        )
+        meta = json.loads(existing_meta) if existing_meta else {}
+        meta["run_completed_at"] = _now_iso()
+        self._refresh_issue_body(run_metadata=meta)
+
         if self._issue is not None:
             self._issue.create_comment(
                 f"Finalised. Winner is #{winner_id}. Awaiting human approval on #{final.number}."
@@ -266,15 +292,24 @@ class GitHubBackend(EvolveBackend):
     def _pr(self, candidate_id: str) -> PullRequest:
         return self._repo.get_pull(int(candidate_id))
 
-    def _refresh_issue_body(self, *, mermaid: str | None = None, report_url: str | None = None) -> None:
+    def _refresh_issue_body(
+        self,
+        *,
+        mermaid: str | None = None,
+        report_url: str | None = None,
+        run_metadata: dict[str, Any] | None = None,
+    ) -> None:
         self._ensure_issue()
         leaderboard = self.get_leaderboard()
         current = self._issue.body or ""
         current_mermaid = mermaid if mermaid is not None else _extract_block(current, GRAPH_OPEN, GRAPH_CLOSE)
         current_report = report_url if report_url is not None else _extract_inline(current, "Report:")
+        if run_metadata is None:
+            existing_meta = _extract_block(current, RUN_METADATA_OPEN, RUN_METADATA_CLOSE)
+            run_metadata = json.loads(existing_meta) if existing_meta else None
         new_body = _render_issue_body(
             self.spec, trait_matrix=leaderboard, mermaid=current_mermaid or "",
-            report_url=current_report,
+            report_url=current_report, run_metadata=run_metadata,
         )
         self._issue.edit(body=new_body)
 
@@ -297,7 +332,12 @@ class GitHubBackend(EvolveBackend):
 
 
 def _render_issue_body(
-    spec: ProblemSpec, *, trait_matrix: list[Candidate], mermaid: str, report_url: str | None
+    spec: ProblemSpec,
+    *,
+    trait_matrix: list[Candidate],
+    mermaid: str,
+    report_url: str | None,
+    run_metadata: dict[str, Any] | None = None,
 ) -> str:
     lines = [
         f"## Objective\n{spec.description}\n",
@@ -322,11 +362,25 @@ def _render_issue_body(
     ]
     if report_url:
         lines.append(f"\nReport: {report_url}")
+    if run_metadata is not None:
+        # Hidden block — the visualizer reads it via _extract_block; the
+        # human reviewer ignores it. Markers parallel TRAIT_MATRIX /
+        # EVOLVE_GRAPH so the parsing pattern is consistent.
+        lines.append("")
+        lines.append(RUN_METADATA_OPEN)
+        lines.append(json.dumps(run_metadata))
+        lines.append(RUN_METADATA_CLOSE)
     lines.append(
         "\n---\n`agents_can_merge: false` — the winner opens a PR against "
         f"`{spec.safety.protected_branch}` but is never merged by an agent.\n"
     )
     return "\n".join(lines)
+
+
+def _now_iso() -> str:
+    """ISO8601 UTC timestamp matching the local backend's format."""
+    import time
+    return time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime())
 
 
 def _render_trait_matrix(candidates: list[Candidate], spec: ProblemSpec) -> str:
