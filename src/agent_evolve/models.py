@@ -318,6 +318,30 @@ class Candidate:
     The serialized form of this dataclass IS the EVOLVE_STATE block embedded
     in PR bodies (GitHub backend) or written as JSON (local backend).
     Every field here has a direct home in the spec in PLAN.md §EVOLVE_STATE.
+
+    Telemetry fields (``started_at`` / ``completed_at`` /
+    ``phase_durations_ms``) are populated by the supervisor as the candidate
+    moves through the round lifecycle. ``started_at`` is set when the
+    candidate is dispatched to its explorer; ``completed_at`` is set when
+    the reviewer verdict is recorded. ``phase_durations_ms`` keys are
+    phase names (``"explorer"``, ``"eval"``, ``"equivalence"``,
+    ``"reviewer"``) and values are wall-clock milliseconds.
+
+    ``diff_stats`` records the candidate's diff size — keys are
+    ``"files_changed"`` / ``"additions"`` / ``"deletions"``, values are
+    counts. Cheap pattern recognition for the trait matrix: small change
+    with big metric impact is interesting; large change with no impact
+    is suspicious. Populated by the supervisor (or by a backend that
+    already inspects the diff for scope enforcement).
+
+    ``operator_reason`` is the supervisor's one-line note about why this
+    operator was assigned to this slot (e.g. "frontier had 1 candidate ->
+    mutate" or "stalled 2 rounds -> explore"). Forensic value when
+    re-reading the trait matrix months later.
+
+    All telemetry fields default to "unset" so the dataclass remains
+    backwards-compatible with state written by older agent-evolve
+    versions — old JSON deserializes fine, just with empty telemetry.
     """
 
     problem_id: str
@@ -333,6 +357,11 @@ class Candidate:
     commit_sha: str | None = None
     equivalence_report: EquivalenceReport | None = None
     reviewer_verdict: ReviewerVerdict | None = None
+    started_at: str | None = None
+    completed_at: str | None = None
+    phase_durations_ms: dict[str, float] = field(default_factory=dict)
+    diff_stats: dict[str, int] = field(default_factory=dict)
+    operator_reason: str = ""
     evolve_version: str = "1"
 
     def to_dict(self) -> dict[str, Any]:

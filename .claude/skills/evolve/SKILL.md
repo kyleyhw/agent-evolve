@@ -366,6 +366,33 @@ Plus:
 - `viz.build_graph(trait_matrix)` → `EvolutionGraph`
 - `viz.render_mermaid(graph)` / `viz.render_html(graph, path)`
 
+## Telemetry
+
+For every candidate, populate the following fields as the candidate
+moves through the round lifecycle. The data is persisted automatically
+(it lives on the `Candidate` dataclass — no separate API call needed):
+
+- **`candidate.started_at`** (ISO8601 UTC) — set when the candidate is
+  dispatched to its explorer at Phase C.
+- **`candidate.completed_at`** (ISO8601 UTC) — set when the reviewer
+  verdict is recorded at Phase E.
+- **`candidate.phase_durations_ms`** (`dict[str, float]`) — wall-clock
+  ms per phase. Keys: `"explorer"`, `"eval"`, `"equivalence"`,
+  `"reviewer"`. Capture `time.perf_counter()` deltas around each phase.
+- **`candidate.diff_stats`** (`dict[str, int]`) — populated from
+  `git_utils.diff_stats(diff_text)` in Phase D after the candidate's
+  diff is fetched. Keys: `"files_changed"`, `"additions"`,
+  `"deletions"`.
+- **`candidate.operator_reason`** (str) — one-line note on why this
+  operator was assigned to this slot, mirroring the round-plan note
+  attached to the problem root in Phase B (e.g. "frontier had 1
+  candidate -> mutate", "stalled 2 rounds -> explore").
+
+Run-level metadata (`run_started_at`, `run_completed_at`,
+`protected_branch_sha`) is captured automatically by
+`backend.create_problem()` and `backend.finalize()` — you do not need
+to populate it.
+
 ## Round lifecycle
 
 Repeat this loop for `spec.evolution.rounds` iterations. A round is done

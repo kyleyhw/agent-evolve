@@ -134,3 +134,98 @@ def test_detect_treats_blank_stdout_as_no_signal(monkeypatch, noisy_output: str)
     ])
     monkeypatch.setattr(subprocess, "run", fake)
     assert git_utils.detect_default_branch() == "main"
+
+
+# ---------------------------------------------------------------------------
+# current_sha
+# ---------------------------------------------------------------------------
+
+
+def test_current_sha_returns_full_hex_when_git_succeeds(monkeypatch):
+    """``git rev-parse <branch>`` output is returned verbatim when shaped like a SHA."""
+    sha = "0123456789abcdef0123456789abcdef01234567"
+    fake = _make_runner([_FakeCompleted(returncode=0, stdout=f"{sha}\n")])
+    monkeypatch.setattr(subprocess, "run", fake)
+    assert git_utils.current_sha("main") == sha
+    # Argv plumbed correctly.
+    assert fake.invocations[0][1:] == ["rev-parse", "main"]
+
+
+def test_current_sha_rejects_non_sha_output(monkeypatch):
+    """Output that is not 40 hex chars (e.g. an error message) returns None."""
+    fake = _make_runner([_FakeCompleted(returncode=0, stdout="not-a-sha\n")])
+    monkeypatch.setattr(subprocess, "run", fake)
+    assert git_utils.current_sha("main") is None
+
+
+def test_current_sha_returns_none_on_git_error(monkeypatch):
+    """Non-zero exit code (e.g. branch does not exist) returns None, no exception."""
+    fake = _make_runner([_FakeCompleted(returncode=128, stdout="")])
+    monkeypatch.setattr(subprocess, "run", fake)
+    assert git_utils.current_sha("nonexistent-branch") is None
+
+
+def test_current_sha_returns_none_when_git_binary_missing(monkeypatch):
+    fake = _make_runner([FileNotFoundError("git not on PATH")])
+    monkeypatch.setattr(subprocess, "run", fake)
+    assert git_utils.current_sha("main") is None
+
+
+# ---------------------------------------------------------------------------
+# diff_stats
+# ---------------------------------------------------------------------------
+
+
+def test_diff_stats_counts_files_and_lines():
+    """Standard two-file diff with mixed additions and deletions."""
+    diff = (
+        "diff --git a/src/foo.py b/src/foo.py\n"
+        "index 1234..5678 100644\n"
+        "--- a/src/foo.py\n"
+        "+++ b/src/foo.py\n"
+        "@@ -1,3 +1,4 @@\n"
+        " context line\n"
+        "-removed one\n"
+        "+added one\n"
+        "+added two\n"
+        "diff --git a/src/bar.py b/src/bar.py\n"
+        "index abcd..ef01 100644\n"
+        "--- a/src/bar.py\n"
+        "+++ b/src/bar.py\n"
+        "@@ -10,2 +10,1 @@\n"
+        "-removed\n"
+    )
+    stats = git_utils.diff_stats(diff)
+    assert stats == {"files_changed": 2, "additions": 2, "deletions": 2}
+
+
+def test_diff_stats_ignores_file_header_lines():
+    """``+++`` and ``---`` markers are file headers, not added/removed content."""
+    diff = (
+        "diff --git a/foo b/foo\n"
+        "--- a/foo\n"
+        "+++ b/foo\n"
+        "@@ -1,1 +1,1 @@\n"
+        "-old\n"
+        "+new\n"
+    )
+    stats = git_utils.diff_stats(diff)
+    assert stats["additions"] == 1
+    assert stats["deletions"] == 1
+
+
+def test_diff_stats_empty_input_yields_zero_counts():
+    assert git_utils.diff_stats("") == {
+        "files_changed": 0, "additions": 0, "deletions": 0,
+    }
+
+
+def test_diff_stats_tolerates_malformed_headers():
+    """A ``diff --git`` header without the expected b/<path> structure is skipped silently."""
+    diff = (
+        "diff --git\n"
+        "+a stray addition\n"
+    )
+    stats = git_utils.diff_stats(diff)
+    # No files counted (header malformed) but the +/- lines are still tallied.
+    assert stats == {"files_changed": 0, "additions": 1, "deletions": 0}

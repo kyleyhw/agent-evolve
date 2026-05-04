@@ -25,6 +25,7 @@ from pathlib import Path
 from typing import Any
 
 from agent_evolve.backends.base import EvolveBackend
+from agent_evolve.git_utils import current_sha
 from agent_evolve.models import Candidate, EquivalenceReport, ProblemSpec, ReviewerVerdict
 
 
@@ -45,6 +46,14 @@ class LocalBackend(EvolveBackend):
         problem_dir = self._problem_dir(problem_id)
         (problem_dir / "candidates").mkdir(parents=True, exist_ok=True)
 
+        # Capture the SHA of the protected branch at run start so the
+        # final report can say "this run's baseline was measured against
+        # commit abc1234"; if main moves mid-run, the recorded SHA still
+        # tells the human reviewer what the search was anchored to.
+        # Best-effort — ``current_sha`` returns ``None`` when git is
+        # unavailable or the branch does not exist locally.
+        protected_sha = current_sha(spec.safety.protected_branch, cwd=str(self.root.parent))
+
         problem_doc = {
             "problem_id": problem_id,
             "created_at": _now_iso(),
@@ -53,6 +62,9 @@ class LocalBackend(EvolveBackend):
             "graph_mermaid": "",
             "report_html_path": None,
             "status": "active",
+            "run_started_at": _now_iso(),
+            "run_completed_at": None,
+            "protected_branch_sha": protected_sha,
         }
         self._atomic_write_json(problem_dir / "problem.json", problem_doc)
         return problem_id
@@ -168,6 +180,7 @@ class LocalBackend(EvolveBackend):
 
         doc["status"] = "awaiting_human_approval"
         doc["winner_id"] = winner_id
+        doc["run_completed_at"] = _now_iso()
         self._atomic_write_json(self._problem_dir(self.problem_id) / "problem.json", doc)
         return str(pr_path)
 

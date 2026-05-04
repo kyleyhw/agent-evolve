@@ -65,6 +65,59 @@ def detect_default_branch(cwd: str | Path | None = None) -> str:
     return _FALLBACK_BRANCH
 
 
+def current_sha(branch: str, cwd: str | Path | None = None) -> str | None:
+    """Return the SHA of *branch* in the repo at *cwd*, or ``None`` on any failure.
+
+    Used to anchor an evolution run to a specific commit on the protected
+    branch — when main moves during a long-running search, the recorded
+    SHA tells you what the round-0 baseline was actually measured
+    against. Falls back to ``None`` (rather than raising) on every
+    failure mode (no git binary, non-repo cwd, branch does not exist,
+    timeout) so a missing SHA shows up as "unknown" in the run metadata
+    rather than aborting the run.
+    """
+    workdir = str(cwd) if cwd is not None else None
+    out = _run_git(["rev-parse", branch], workdir)
+    if out and len(out) == 40 and all(c in "0123456789abcdef" for c in out.lower()):
+        return out
+    return None
+
+
+def diff_stats(diff_text: str) -> dict[str, int]:
+    """Parse a unified diff and return file/line counts.
+
+    Returns a dict with keys ``files_changed``, ``additions``,
+    ``deletions``. Counts ``+``/``-`` lines (excluding the ``+++``/``---``
+    file headers) and unique paths from ``diff --git a/<path> b/<path>``
+    headers. Empty input yields all-zero counts.
+
+    The parser is intentionally tolerant — unrecognised lines are
+    skipped, malformed headers are ignored. Useful for forensic
+    pattern-matching on the trait matrix; not a substitute for an
+    authoritative tool like ``git diff --shortstat``.
+    """
+    files: set[str] = set()
+    additions = 0
+    deletions = 0
+    for line in diff_text.splitlines():
+        if line.startswith("diff --git"):
+            parts = line.split()
+            # "diff --git a/path b/path" — take the b-side path. Slice
+            # 2 chars to drop the "b/" prefix; resilient against missing
+            # parts (a malformed header just contributes nothing).
+            if len(parts) >= 4 and parts[3].startswith("b/"):
+                files.add(parts[3][2:])
+        elif line.startswith("+") and not line.startswith("+++"):
+            additions += 1
+        elif line.startswith("-") and not line.startswith("---"):
+            deletions += 1
+    return {
+        "files_changed": len(files),
+        "additions": additions,
+        "deletions": deletions,
+    }
+
+
 def _run_git(args: list[str], cwd: str | None) -> str | None:
     """Run ``git`` with *args*; return stripped stdout, or ``None`` on any failure.
 

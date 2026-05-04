@@ -225,6 +225,74 @@ def test_finalize_writes_artifact_bundle(tmp_path, sample_spec, approved_verdict
     assert (artifact_dir / "candidates" / "1.state.json").exists()
 
 
+def test_create_problem_records_run_metadata(tmp_path, sample_spec):
+    """``problem.json`` gets ``run_started_at`` and ``protected_branch_sha`` keys."""
+    backend = LocalBackend(sample_spec, root=tmp_path)
+    pid = backend.create_problem(sample_spec)
+
+    doc = json.loads((tmp_path / pid / "problem.json").read_text(encoding="utf-8"))
+    assert "run_started_at" in doc
+    assert doc["run_started_at"].endswith("Z")  # ISO8601 UTC
+    assert "run_completed_at" in doc
+    assert doc["run_completed_at"] is None
+    assert "protected_branch_sha" in doc  # may be None if git unavailable
+
+
+def test_finalize_stamps_run_completed_at(tmp_path, sample_spec, approved_verdict):
+    """``finalize`` populates the previously-None ``run_completed_at``."""
+    backend = LocalBackend(sample_spec, root=tmp_path)
+    pid = backend.create_problem(sample_spec)
+
+    winner = Candidate(problem_id=pid, candidate_id="1", operator="mutate", round=1)
+    backend.submit_candidate(winner)
+    backend.score_candidate("1", {"duration_ms": 60.0, "test_pass_rate": 1.0})
+    backend.record_verdict("1", approved_verdict)
+
+    doc_pre = json.loads((tmp_path / pid / "problem.json").read_text(encoding="utf-8"))
+    assert doc_pre["run_completed_at"] is None
+
+    backend.finalize("1")
+
+    doc_post = json.loads((tmp_path / pid / "problem.json").read_text(encoding="utf-8"))
+    assert doc_post["run_completed_at"] is not None
+    assert doc_post["run_completed_at"].endswith("Z")
+    # run_started_at must still be present and unchanged.
+    assert doc_post["run_started_at"] == doc_pre["run_started_at"]
+
+
+def test_candidate_round_trips_telemetry_fields():
+    """The five new telemetry fields survive ``to_dict`` / ``from_dict``."""
+    c = Candidate(
+        problem_id="1", candidate_id="3",
+        operator="mutate", round=2,
+        started_at="2026-05-04T12:00:00Z",
+        completed_at="2026-05-04T12:01:30Z",
+        phase_durations_ms={"explorer": 5000.0, "eval": 4500.0},
+        diff_stats={"files_changed": 1, "additions": 12, "deletions": 4},
+        operator_reason="frontier had 1 candidate -> mutate",
+    )
+    restored = Candidate.from_dict(c.to_dict())
+    assert restored.started_at == "2026-05-04T12:00:00Z"
+    assert restored.completed_at == "2026-05-04T12:01:30Z"
+    assert restored.phase_durations_ms == {"explorer": 5000.0, "eval": 4500.0}
+    assert restored.diff_stats == {"files_changed": 1, "additions": 12, "deletions": 4}
+    assert restored.operator_reason == "frontier had 1 candidate -> mutate"
+
+
+def test_candidate_telemetry_fields_default_to_unset():
+    """A Candidate without telemetry serializes with empty/None defaults — backwards-compatible."""
+    c = Candidate(
+        problem_id="1", candidate_id="1",
+        operator="explore", round=1,
+    )
+    d = c.to_dict()
+    assert d["started_at"] is None
+    assert d["completed_at"] is None
+    assert d["phase_durations_ms"] == {}
+    assert d["diff_stats"] == {}
+    assert d["operator_reason"] == ""
+
+
 def test_reviewer_verdict_round_trips_informative_field():
     """The new ``informative`` field survives ``to_dict`` / ``from_dict``."""
     c = Candidate(
