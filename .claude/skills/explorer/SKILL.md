@@ -19,6 +19,7 @@ You are one of several explorers in a round. The supervisor has handed you:
 - An **operator**: `mutate` | `crossover` | `explore`
 - The **problem spec**: `agent-evolve.yaml`
 - Your **candidate id** and **branch name** (`evolve/<problem-id>/candidate-<id>`)
+- The **disconfirmed-hypothesis list** for your lineage (may be empty)
 
 Your goal is to produce one branch that contains your proposed change, a
 completed EVOLVE_STATE block, and nothing else.
@@ -37,6 +38,12 @@ completed EVOLVE_STATE block, and nothing else.
    do not just re-mutate the parent.
 4. **One candidate per run.** You do not split your work across branches. You
    do not open a second candidate "just in case". The round budget is fixed.
+5. **A negative result is still a result.** If your sanity check shows the
+   change does not help, commit the candidate anyway with a conclusion that
+   says so plainly — a disconfirmed hypothesis, honestly reported, prunes
+   the search space for every later round. The hypothesis is a
+   pre-registration: never rewrite it after coding to match what happened,
+   and never shade the conclusion toward the result you wanted.
 
 ## Operator semantics
 
@@ -68,6 +75,9 @@ slots the supervisor assigned you.
    - The parent's EVOLVE_STATE (especially `conclusion` — it often names why
      the parent stopped improving).
    - `agent-evolve.yaml` — re-read scope and metrics every round.
+   - The disconfirmed-hypothesis list, if the supervisor attached one. Do
+     not re-propose an entry from it unless your hypothesis names exactly
+     what differs this time.
 
 2. **Write the hypothesis**. Before any code. Fill in the EVOLVE_STATE block
    first with hypothesis populated and everything else null.

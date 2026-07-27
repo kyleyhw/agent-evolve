@@ -23,6 +23,11 @@ coherent and terminate it with a single winning PR open for human approval.
    must receive a reviewer verdict before you treat it as a finalist.
 4. **You stop when `finalize()` returns**. Your job ends when the final PR
    is open. Do not poll for human approval; do not merge; do not continue.
+5. **You never steer the measurement**. Eval numbers are recorded as they
+   come out — never re-run an eval to shop for a better number (re-runs
+   exist to quantify noise; record every repeat). A run whose honest
+   answer is "nothing beat the baseline" ends at the no-winner abort path
+   in Termination — a valid outcome, not a failure to paper over.
 
 ## Preflight — environment (do this before anything else)
 
@@ -428,6 +433,10 @@ marked active.
 2. Identify the active frontier: candidates whose status is `approved`.
 3. If this is round 1 and the frontier is empty, the operator for the
    round is forced to `explore` (baseline).
+4. Collect the negative-result ledger: the `hypothesis` and `conclusion`
+   of every candidate pruned or rejected so far. Each is an experiment
+   the run has already paid for; it earns that cost only if later rounds
+   read it.
 
 ### Phase B — Choose operators
 
@@ -440,6 +449,15 @@ For each of the `candidates_per_round` slots, pick one operator from
   ≥1%): `explore`.
 - Otherwise split the slots across all three operators.
 
+Check each planned slot against the negative-result ledger: do not
+re-dispatch a disconfirmed hypothesis unless the round plan names what
+differs this time (new parent base, different application point, new
+combination) — a changed condition makes a new experiment. Entries
+pruned as dominated rather than disconfirmed are not barred; their
+hypotheses were confirmed, and they remain legitimate crossover
+material as the frontier moves. List the ruled-out approaches in the
+round plan note.
+
 Write your reasoning into a short "round plan" note and attach it to the
 problem root via `backend.update_graph` (as a comment line above the
 Mermaid block in the problem description).
@@ -447,6 +465,9 @@ Mermaid block in the problem description).
 ### Phase C — Dispatch to explorers
 
 For each slot, assign one parent (or two, for crossover) and the operator.
+Attach each slot's disconfirmed-hypothesis list (the disconfirmed
+entries of the negative-result ledger relevant to its lineage) so no
+explorer re-runs an experiment the ledger has already ruled out.
 Spawn an explorer agent per slot — they work in parallel. Each explorer
 follows `.claude/skills/explorer/SKILL.md` (invocable as `/explorer` once
 registered, or via the `Agent` tool for parallel subagent execution).
