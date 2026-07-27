@@ -24,6 +24,29 @@ coherent and terminate it with a single winning PR open for human approval.
 4. **You stop when `finalize()` returns**. Your job ends when the final PR
    is open. Do not poll for human approval; do not merge; do not continue.
 
+## Preflight — environment (do this before anything else)
+
+The supervisor imports `agent_evolve`; the `eval_command` runs the
+**target repo's** code. These are separate processes and routinely need
+**different interpreters** — `agent_evolve` is typically a user-level
+install (system Python, `~/.local/bin/agent-evolve`) and will **not** be
+importable under a target project's `uv run` / `.venv`.
+
+So: never conclude the backend is missing from one failed import. Check
+
+```
+python -c "import agent_evolve"      # system interpreter
+py -c "import agent_evolve"          # launcher
+Get-Command agent-evolve             # CLI on PATH
+```
+
+and only then decide. Set `eval_command` to whichever interpreter has the
+*target repo's* dependencies (commonly `uv run python ...`), independent
+of how the supervisor imports the library. If the two genuinely cannot be
+reconciled, say so and ask — do not silently fall back to hand-running
+the protocol, which loses every artifact below (branches, reviewer
+verdicts, trait matrix, ablation report, PR).
+
 ## Phase 0 — Establish the spec (new)
 
 Before any search begins, you need a `ProblemSpec`. Two paths:
