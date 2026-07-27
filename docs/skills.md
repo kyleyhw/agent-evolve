@@ -202,12 +202,20 @@ evolve skill
  │       (usually just the eval command)
  │     — offer to save the inferred spec as agent-evolve.yaml
  │
+ ├─► reads the Trait Matrix; collects the negative-result ledger
+ │     (hypothesis + conclusion of every pruned/rejected candidate) —
+ │     no disconfirmed hypothesis is re-dispatched unless the round
+ │     plan names what differs this time
+ │
  ├─► spawns /explorer × candidates_per_round (parallel via Agent tool)
  │     each explorer:
- │        1. reads parent candidate + EVOLVE_STATE
- │        2. writes hypothesis
+ │        1. reads parent candidate + EVOLVE_STATE + the lineage's
+ │           disconfirmed-hypothesis list
+ │        2. writes hypothesis — a pre-registration, never rewritten
+ │           after coding
  │        3. codes inside scope.target_files only
- │        4. commits to evolve/<problem>/candidate-<n>
+ │        4. commits to evolve/<problem>/candidate-<n>, even when the
+ │           local result is negative
  │
  ├─► for each returned candidate:
  │        scope.enforce_scope(diff, spec.scope)
@@ -236,6 +244,35 @@ Claude never merges the final PR — that invariant is enforced by the Python
 layer (`assert_no_merge` + `__init_subclass__` guard on `EvolveBackend`),
 not by a rule in the skill prompt. You review the PR and merge it yourself.
 
+### Scientific-method discipline
+
+The loop runs as a sequence of pre-registered experiments; three rules
+across the skills keep it honest:
+
+- **Hypotheses are pre-registrations.** The explorer writes its
+  hypothesis before any code and never rewrites it to match the
+  outcome. The reviewer's `hypothesis_coherent` check separates *drift*
+  (the diff does something other than the hypothesis names — fail) from
+  *disconfirmation* (the diff does what the hypothesis names and it did
+  not help — coherent; such a candidate fails on `metrics_improved`,
+  never on honesty).
+- **Negative results are results.** A candidate whose change did not
+  help is committed with an honest conclusion, not discarded. The
+  supervisor collects every pruned or rejected candidate's hypothesis
+  and conclusion into a negative-result ledger, and a disconfirmed
+  hypothesis is not re-dispatched unless the round plan names a changed
+  condition (new parent base, different application point, new
+  combination) — the conditions are part of the hypothesis, so a
+  changed condition is a new experiment. Dominated-but-confirmed
+  candidates are not barred; they remain legitimate crossover material
+  as the frontier moves.
+- **Nobody steers the measurement.** Explorers never score themselves —
+  the supervisor runs the eval authoritatively and never re-runs it to
+  shop for a better number. The reviewer has no stake in the run
+  producing a winner: a round with zero approvals is valid, and a run
+  where nothing beats the baseline ends in an explicit no-winner abort
+  rather than a manufactured success.
+
 ---
 
 ## Editing and extending the skills
@@ -249,9 +286,12 @@ prompt:
 
 A few project-specific conventions to preserve when forking:
 
-- **The "Prime directives" block**: four non-negotiables for `/evolve`
+- **The "Prime directives" blocks**: five non-negotiables for `/evolve`
   (never merge, never override scope, never skip reviewer, stop on
-  `finalize`). Changing these weakens the safety contract.
+  `finalize`, never steer the measurement), plus role-level directives
+  in the explorer ("a negative result is still a result") and the
+  reviewer ("no stake in the run producing a winner"). Changing these
+  weakens the safety and scientific-integrity contract.
 - **The reviewer's checklist format**: a fixed list of `pass`/`fail` items.
   `/evolve` parses this to know whether to accept the candidate; adding a
   free-form "verdict" instead breaks the pipeline.
@@ -278,6 +318,16 @@ to a full copy when symlinks require admin rights. That works, but edits
 to the SKILL.md in the repo won't propagate to `~/.claude/skills/`. Enable
 Windows Developer Mode or run an elevated shell, delete the copied
 directories, and re-run `install.py` to get proper symlinks.
+
+**`import agent_evolve` fails inside the target repo.** Usually not a
+broken install — the supervisor's library and the target repo's code
+routinely live in different interpreters. `agent_evolve` is a
+user-level install (system Python / `uv` tool) and is invisible from a
+target project's `.venv`; the `eval_command` should use whichever
+interpreter has the *target's* dependencies (commonly
+`uv run python ...`). The evolve skill's Preflight section walks Claude
+through this check — one failed import is never treated as proof the
+backend is missing.
 
 **Skill runs but uses wrong tooling.** Each SKILL.md names the Python
 functions it invokes (e.g. `backend.score_candidate`). If you or Claude

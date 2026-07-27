@@ -38,6 +38,11 @@ equivalence checking, and an interactive D3.js evolution graph.
   `hypothesis` — hundreds of random inputs through both the original and the
   optimised function; no claimed speedup is accepted without proof of
   equivalence.
+- **Scientific-method discipline.** Hypotheses are pre-registered before
+  any code is written; a disconfirmed hypothesis is committed with an
+  honest conclusion rather than discarded, and lands in a negative-result
+  ledger that later rounds must consult before re-trying an approach.
+  Evals are never re-run to shop for a better number.
 - **Human approval gate.** Agents are architecturally forbidden from merging.
   `agents_can_merge` is `False` on the abstract base class; `__init_subclass__`
   raises `TypeError` if a subclass tries to override it. The final PR is
@@ -419,10 +424,17 @@ flowchart TD
 
 Every round:
 
-1. Supervisor reads the Trait Matrix.
+1. Supervisor reads the Trait Matrix and collects the negative-result
+   ledger — the hypothesis and conclusion of every candidate pruned or
+   rejected so far.
 2. Picks one of `mutate` / `crossover` / `explore` for each of
-   `candidates_per_round` slots.
-3. Explorers produce candidates on `evolve/<problem>/candidate-<n>` branches.
+   `candidates_per_round` slots, checking the plan against the ledger: a
+   disconfirmed hypothesis is not re-dispatched unless the round plan
+   names what differs this time.
+3. Explorers — handed the parent, the operator, and the lineage's
+   disconfirmed hypotheses — produce candidates on
+   `evolve/<problem>/candidate-<n>` branches, committed even when the
+   local result is negative: an honest disconfirmation is a result.
 4. Each candidate runs through the eval runner, the scope enforcer, and (in
    runtime mode) the equivalence checker.
 5. The reviewer gates every scored candidate.
