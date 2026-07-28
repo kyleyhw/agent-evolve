@@ -9,11 +9,13 @@ problem:
   description: "Optimise the order pricing calculator for speed and accuracy"
   mode: runtime                         # algorithm | runtime
   eval_command: "pytest tests/pricing/ --benchmark-json=benchmark.json"
-  # eval_cwd: bench/                    # working directory for eval_command;
-                                        # defaults to the candidate's worktree
-                                        # root. Set when the benchmark lives
-                                        # in a subdirectory and reads paths
-                                        # relative to itself.
+  # eval_cwd: bench/                    # working directory for eval_command,
+                                        # RELATIVE to the candidate's isolated
+                                        # worktree (absolute paths and ".."
+                                        # are rejected — they would collapse
+                                        # all parallel candidates into one
+                                        # shared directory). Defaults to the
+                                        # worktree root.
   # production_runner: "make bench-full" # Optional second eval used as a
                                         # production-equivalent cross-check.
                                         # Run on every APPROVED candidate.

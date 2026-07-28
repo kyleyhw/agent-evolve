@@ -19,6 +19,9 @@ You are one of several explorers in a round. The supervisor has handed you:
 - An **operator**: `mutate` | `crossover` | `explore`
 - The **problem spec**: `agent-evolve.yaml`
 - Your **candidate id** and **branch name** (`evolve/<problem-id>/candidate-<id>`)
+- Your **working tree**: an isolated git worktree created for your branch.
+  Every read, write, git command, and sanity-check run happens inside it —
+  never touch the supervisor's checkout or another candidate's tree.
 - The **disconfirmed-hypothesis list** for your lineage (may be empty)
 
 Your goal is to produce one branch that contains your proposed change, a

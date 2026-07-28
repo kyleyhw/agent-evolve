@@ -28,6 +28,15 @@ coherent and terminate it with a single winning PR open for human approval.
    exist to quantify noise; record every repeat). A run whose honest
    answer is "nothing beat the baseline" ends at the no-winner abort path
    in Termination — a valid outcome, not a failure to paper over.
+6. **Every candidate gets its own worktree**. Before an explorer is
+   dispatched, create a dedicated working tree for its branch
+   (`agent_evolve.worktree.create_worktree`), anchored at the protected
+   branch's SHA. Never point two explorers at one tree, and never let an
+   explorer work in the user's checkout: N agents checking out N branches
+   in a shared directory silently overwrite each other's files, and every
+   measurement downstream of that is garbage. `create_worktree` raises
+   when isolation cannot be established — that is a stop, not a
+   fall-back-to-shared-directory.
 
 ## Preflight — environment (do this before anything else)
 
@@ -147,12 +156,24 @@ The procedure:
 
 ```python
 from agent_evolve.eval import run_eval, validate_baseline
+from agent_evolve.git_utils import current_sha
+from agent_evolve.worktree import create_worktree
 
-# 1. Check out the protected branch in a clean working tree (a git
-#    worktree is the safe way — does not disturb the user's current
-#    branch). Use spec.eval_cwd if set; otherwise the worktree root.
-baseline_cwd = spec.eval_cwd or "<worktree root>"
-baseline_eval = run_eval(spec.eval_command, cwd=baseline_cwd)
+# 1. Materialise the protected branch at a FIXED SHA in its own worktree —
+#    never measure in the user's checkout (their uncommitted state would
+#    leak into the baseline). This SHA is the anchor every candidate
+#    shares; if it cannot be resolved, stop before spending any budget.
+anchor = current_sha(spec.safety.protected_branch)
+if anchor is None:
+    raise RuntimeError(f"cannot resolve {spec.safety.protected_branch!r} to a SHA")
+baseline_wt = create_worktree(
+    f"evolve/{problem_id}/baseline", repo=repo_root, base=anchor,
+)
+baseline_eval = run_eval(
+    spec.eval_command,
+    cwd=spec.resolved_eval_cwd(baseline_wt.path),
+    scratch=baseline_wt.path.with_name(baseline_wt.path.name + ".scratch"),
+)
 
 # 2. Validate against the user's stated expectation, if any.
 check = validate_baseline(
@@ -472,6 +493,40 @@ Spawn an explorer agent per slot — they work in parallel. Each explorer
 follows `.claude/skills/explorer/SKILL.md` (invocable as `/explorer` once
 registered, or via the `Agent` tool for parallel subagent execution).
 
+Before any slot is dispatched, give its candidate an isolated tree
+(prime directive 6):
+
+```python
+from agent_evolve.git_utils import current_sha
+from agent_evolve.worktree import create_worktree
+
+anchor = current_sha(spec.safety.protected_branch)   # ONE SHA for the whole run
+worktrees[cid] = create_worktree(
+    f"evolve/{problem_id}/candidate-{cid}", repo=repo_root, base=anchor,
+)
+```
+
+`create_worktree` RAISES when isolation cannot be established — do not
+catch-and-continue; a candidate without its own tree must not run.
+Passing the anchor SHA (not a branch name — the call rejects those)
+keeps every candidate rooted at the same baseline commit even if the
+protected branch moves mid-run. Re-invocation after a crash is safe: an
+existing tree, or a surviving branch whose tree was lost, is re-attached
+rather than wiped.
+
+Hand each explorer its tree:
+
+- **`claude` slots (Agent tool)**: pin the subagent to the candidate's
+  tree — state `worktrees[cid].path` in the prompt as the ONLY directory
+  it may read, write, or run git in. (Alternative: the Agent tool's
+  `isolation: "worktree"` gives the subagent a harness-managed tree
+  instead; the commit still lands on the candidate branch in the shared
+  repository, and Phase D then evals in the supervisor-created tree for
+  that branch — `create_worktree` re-attaches it.)
+- **external CLIs (gemini, codex, ...)**: invoke with the working
+  directory set to `worktrees[cid].path` (`cd` there first) and state in
+  the prompt that this tree is theirs alone.
+
 Dispatch path depends on `spec.agents.explorer`:
 
 - `"claude"` (default, single agent): use the `Agent` tool — explorers
@@ -494,17 +549,40 @@ For each returned candidate:
 
 1. Call `scope.enforce_scope(diff, spec.scope)`. If `in_scope` is false:
    `backend.prune(candidate_id, f"scope violation: {violations}")`. Skip.
-2. Call `eval.run_eval(spec.eval_command, cwd=spec.eval_cwd or candidate_workdir)`.
-   When `spec.eval_cwd` is set, the eval runs in that directory rather
-   than the candidate's worktree root — necessary when the benchmark
-   lives in `tests/perf/`, `bench/`, etc. and reads paths relative to
-   itself.
+2. Call
+   `eval.run_eval(spec.eval_command, cwd=spec.resolved_eval_cwd(worktrees[cid].path), scratch=worktrees[cid].path.with_name(worktrees[cid].path.name + ".scratch"))`.
+   `resolved_eval_cwd` joins `spec.eval_cwd` (always tree-relative — the
+   manifest loader rejects absolute values) onto THIS candidate's tree:
+   a benchmark living in `bench/` runs in `<candidate tree>/bench/`,
+   never in a directory shared with other candidates. The `scratch` dir
+   is likewise per-candidate — see *What isolation does NOT cover*.
 3. If `spec.mode == "runtime"` and
    `spec.runtime_mode.equivalence_check != "disabled"`: run
    `equivalence.check_equivalence` on the target function pair.
 4. Record metrics + equivalence via `backend.score_candidate(id, metrics,
    equivalence=report)`. If the equivalence report is not
    `equivalent: true`, attach a reviewer verdict of `REJECT` and move on.
+
+#### What isolation does NOT cover
+
+Worktrees isolate REPOSITORY paths only. An eval that writes to a fixed
+absolute path (`/tmp/foo`, `C:/tmp/cache`, a hardcoded dataset scratch
+dir) hits ONE directory from every candidate in every worktree —
+concurrent candidates silently interleave reads and writes, and the
+corruption never appears in any diff. The remedy is the scratch
+contract:
+
+- pass a fresh per-candidate directory as `run_eval(..., scratch=...)`;
+  the runner creates it and exports it to the eval process as
+  `AGENT_EVOLVE_SCRATCH`;
+- an eval that caches or writes outside its working tree MUST honour
+  `AGENT_EVOLVE_SCRATCH`; any fixed absolute scratch path corrupts
+  concurrent runs and disqualifies the measurement.
+
+Network resources, databases, GPUs, and port bindings are likewise
+shared. If the eval touches them, serialise the slots or parameterise
+per candidate — parallel dispatch is only valid when the eval's writes
+are confined to its tree and its scratch dir.
 
 ### Phase E — Reviewer pass
 
@@ -531,7 +609,13 @@ proxy.
 
 ```python
 if spec.production_runner and verdict.verdict == "APPROVE":
-    prod = run_eval(spec.production_runner, cwd=spec.eval_cwd or candidate_workdir)
+    prod = run_eval(
+        spec.production_runner,
+        cwd=spec.resolved_eval_cwd(worktrees[candidate_id].path),
+        scratch=worktrees[candidate_id].path.with_name(
+            worktrees[candidate_id].path.name + ".scratch"
+        ),
+    )
     check = validate_baseline(
         measured=prod.metrics,
         expected=candidate.metrics,                 # eval said this
@@ -620,19 +704,24 @@ After the final round:
 
    diff_text = git_diff(winner.branch_name(), spec.safety.protected_branch)
 
+   # A dedicated tree for the ablation pass, same API as the candidates:
+   ablation_wt = create_worktree(
+       f"evolve/{problem_id}/ablation", repo=repo_root, base=anchor,
+   )
+
    def apply_ablation(hunk):
-       # Materialise the hunk-stripped tree in a scratch worktree.
+       # Materialise the hunk-stripped tree in the ablation worktree.
        # Return True on success, False if `git apply --reverse` cannot
        # apply the patch cleanly. The supervisor is responsible for
        # restoring the tree between hunks.
-       return apply_reverse_patch(hunk.patch, scratch_worktree)
+       return apply_reverse_patch(hunk.patch, ablation_wt.path)
 
    report = run_ablation_report(
        winner_id=winner.candidate_id,
        winner_metrics=winner.metrics,
        diff_text=diff_text,
        eval_command=spec.eval_command,
-       eval_cwd=spec.eval_cwd or scratch_worktree,
+       eval_cwd=spec.resolved_eval_cwd(ablation_wt.path),
        apply_ablation=apply_ablation,
    )
    pr_body_addendum = render_ablation_markdown(report)
@@ -650,8 +739,16 @@ After the final round:
    When `spec.safety.run_ablation_report` is `False`, skip this step
    entirely — useful when the eval is expensive and the human reviewer
    does not need the per-hunk breakdown.
-5. Record the final PR URL in the problem root.
-6. **Stop.** Do not monitor the PR. Do not re-run. Do not merge.
+5. **Remove the run's worktrees, keep the branches.** For every
+   candidate tree, plus the baseline and ablation trees:
+   `remove_worktree(wt, repo=repo_root)` (best-effort by design — a
+   cleanup failure must not kill a finished run), and delete each tree's
+   `.scratch` sibling with a plain directory removal. The BRANCHES stay:
+   `safety.branch_cleanup` governs them, and every commit remains
+   reachable for forensics. Trees are disposable; branches are the
+   record.
+6. Record the final PR URL in the problem root.
+7. **Stop.** Do not monitor the PR. Do not re-run. Do not merge.
 
 ## Failure modes
 

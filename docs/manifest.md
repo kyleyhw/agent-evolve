@@ -128,16 +128,42 @@ failure and lets the reviewer decide.
 
 ### `problem.eval_cwd` (string, optional)
 
-Working directory for `eval_command`. When unset (the default), the
-supervisor runs the eval at the candidate's worktree root. Set this
-when the benchmark lives in a subdirectory and reads paths relative to
-itself:
+Working directory for `eval_command`, **relative to the candidate's
+isolated worktree**. When unset (the default), the eval runs at the
+worktree root. Set this when the benchmark lives in a subdirectory and
+reads paths relative to itself:
 
 ```yaml
 problem:
   eval_command: "python bench.py"
   eval_cwd: bench/perf/                  # bench.py reads ./fixtures/...
 ```
+
+Each parallel candidate resolves this against its *own* tree
+(`<candidate worktree>/bench/perf/`), via
+`ProblemSpec.resolved_eval_cwd(worktree_root)`. Absolute paths and `..`
+traversal are rejected at manifest load: a value that escapes the tree
+would point every candidate's eval at one shared directory, destroying
+per-candidate isolation. An eval that must write outside its tree uses
+the scratch contract below.
+
+### Scratch contract (`AGENT_EVOLVE_SCRATCH`)
+
+Worktrees isolate repository paths only — an eval that writes to a
+fixed absolute location (`/tmp/foo`, `C:/tmp/foo`) hits the same
+directory from every concurrently running candidate and silently
+interleaves runs. The supervisor therefore passes a fresh per-candidate
+scratch directory to every eval invocation; the runner creates it and
+exports it to the eval process as the environment variable
+`AGENT_EVOLVE_SCRATCH`.
+
+Rules for eval authors:
+
+- Anything cached or written outside the working tree goes under
+  `$AGENT_EVOLVE_SCRATCH` (`os.environ["AGENT_EVOLVE_SCRATCH"]` in
+  Python).
+- A hard-coded absolute scratch path corrupts concurrent runs and
+  disqualifies the measurement.
 
 ### `problem.expected_baseline` (mapping, optional)
 

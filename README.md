@@ -34,6 +34,11 @@ equivalence checking, and an interactive D3.js evolution graph.
 - **Module-scoped runs.** Each evolution targets a specific file or directory;
   the scope enforcer rejects any candidate whose diff strays outside
   `target_files` or touches `do_not_touch`.
+- **Per-candidate isolation.** Every candidate branch gets its own git
+  worktree (a sibling of the repo, `<repo>.worktrees/<slug>`), so parallel
+  explorers never write into the same directory. Evals resolve `eval_cwd`
+  inside their own tree and receive a private scratch directory via
+  `AGENT_EVOLVE_SCRATCH` for anything written outside it.
 - **Runtime mode with logic equivalence.** Property-based testing via
   `hypothesis` — hundreds of random inputs through both the original and the
   optimised function; no claimed speedup is accepted without proof of
@@ -559,7 +564,7 @@ src/agent_evolve/
     sandbox/      docker_runner.py
     scope/        enforcer.py
     viz/          graph.py  mermaid.py  html_report.py
-    models.py     config.py  cli.py
+    models.py     config.py  cli.py  worktree.py
 .claude/skills/                 ← auto-discovered by Claude Code
     evolve/SKILL.md             ← the /evolve entry point (supervisor role)
     explorer/SKILL.md
@@ -577,6 +582,7 @@ examples/
 tests/
     test_backends.py  test_equivalence.py  test_eval_runner.py
     test_scope.py     test_viz.py          test_config.py
+    test_worktree.py
 ```
 
 ## References
