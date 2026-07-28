@@ -2,6 +2,9 @@
 
 from __future__ import annotations
 
+import subprocess
+from pathlib import Path
+
 import pytest
 
 from agent_evolve.models import (
@@ -16,6 +19,49 @@ from agent_evolve.models import (
     SafetySpec,
     ScopeSpec,
 )
+
+
+def run_git(repo: Path, *args: str) -> str:
+    """Run git in *repo* for test setup/assertions; returns stripped stdout.
+
+    Asserts success loudly (with git's stderr) rather than returning a
+    sentinel — in tests, a failed setup command is a broken test, not a
+    signal to degrade gracefully.
+    """
+    result = subprocess.run(
+        ["git", *args],
+        cwd=repo,
+        capture_output=True,
+        text=True,
+        check=False,
+    )
+    assert result.returncode == 0, f"git {' '.join(args)} failed: {result.stderr.strip()}"
+    return result.stdout.strip()
+
+
+def init_git_repo(path: Path) -> Path:
+    """Initialise a throwaway repository at *path* with one commit on ``main``.
+
+    Deliberately self-contained so machine-global git config cannot leak in:
+    explicit identity, ``commit.gpgsign false`` (a global signing key would
+    hang non-interactive tests), and ``init -b main`` to pin the branch name
+    regardless of the machine's ``init.defaultBranch``.
+    """
+    path.mkdir(parents=True, exist_ok=True)
+    run_git(path, "init", "-b", "main")
+    run_git(path, "config", "user.email", "test@example.com")
+    run_git(path, "config", "user.name", "Test User")
+    run_git(path, "config", "commit.gpgsign", "false")
+    (path / "README.md").write_text("seed\n", encoding="utf-8")
+    run_git(path, "add", "-A")
+    run_git(path, "commit", "-m", "seed commit")
+    return path
+
+
+@pytest.fixture
+def git_repo(tmp_path: Path) -> Path:
+    """A throwaway git repository with one commit on branch ``main``."""
+    return init_git_repo(tmp_path / "repo")
 
 
 @pytest.fixture
