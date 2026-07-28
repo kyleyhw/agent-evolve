@@ -12,6 +12,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass, field, asdict
 from enum import Enum
+from pathlib import Path, PurePosixPath, PureWindowsPath
 from typing import Any, Literal
 
 from agent_evolve.eval.equivalence import EquivalenceReport
@@ -217,6 +218,33 @@ class AgentsSpec:
         return list(self.explorer)
 
 
+def eval_cwd_violation(value: str) -> str | None:
+    """Why *value* is unusable as ``eval_cwd``, or ``None`` when it is fine.
+
+    ``eval_cwd`` must stay INSIDE the candidate's isolated worktree, so it
+    has to be relative and free of parent traversal. Checked against both
+    POSIX and Windows path flavours so a manifest is judged identically on
+    every platform (``/tmp/x``, ``C:/x``, ``//server/share`` are all
+    anchored; ``bench/perf`` is not).
+
+    Shared by the manifest loader (raising ``ManifestError`` at load time)
+    and :meth:`ProblemSpec.resolved_eval_cwd` (raising ``ValueError`` for
+    specs constructed programmatically, past the loader).
+    """
+    if PurePosixPath(value).anchor or PureWindowsPath(value).anchor:
+        return (
+            f"eval_cwd must be relative to the candidate's working tree, got "
+            f"anchored path {value!r} — an absolute eval_cwd points every "
+            f"parallel candidate at the same directory, destroying isolation"
+        )
+    if ".." in PurePosixPath(value).parts or ".." in PureWindowsPath(value).parts:
+        return (
+            f"eval_cwd must not contain '..' components, got {value!r} — "
+            f"parent traversal escapes the candidate's isolated working tree"
+        )
+    return None
+
+
 @dataclass(frozen=True)
 class ProblemSpec:
     """The full manifest loaded from ``agent-evolve.yaml``.
@@ -224,11 +252,14 @@ class ProblemSpec:
     Most fields map 1:1 onto YAML sections of the same name. The fields
     documented below need a closer look.
 
-    ``eval_cwd`` is the working directory for the eval command. Use this
-    when the eval lives in a subdirectory (``tests/perf/``, ``bench/``)
-    rather than at the repo root. When unset, the supervisor uses the
-    candidate's working tree root as cwd, matching the historical
-    behaviour.
+    ``eval_cwd`` is the working directory for the eval command, *relative
+    to the candidate's isolated working tree* — resolve it per candidate
+    via :meth:`resolved_eval_cwd`. Use it when the eval lives in a
+    subdirectory (``tests/perf/``, ``bench/``) rather than at the tree
+    root. Absolute paths and ``..`` traversal are rejected (see
+    :func:`eval_cwd_violation`): they would point every parallel candidate
+    at one shared directory. When unset, the eval runs at the worktree
+    root.
 
     ``expected_baseline`` and ``expected_baseline_tolerance`` together
     form a sanity-check gate the supervisor runs before round 1: it
@@ -290,6 +321,26 @@ class ProblemSpec:
         baseline-validation pass detects the disagreement and aborts.
         """
         return self.eval_command.replace("{symbol}", symbol_name)
+
+    def resolved_eval_cwd(self, worktree_root: Path) -> Path:
+        """The eval working directory inside ONE candidate's tree.
+
+        Joins ``eval_cwd`` onto *worktree_root* — every candidate must
+        resolve against its own isolated tree, or all parallel evals
+        collapse into a single shared directory. Returns *worktree_root*
+        itself when ``eval_cwd`` is unset.
+
+        Raises ``ValueError`` on an anchored / traversing ``eval_cwd``.
+        The manifest loader already rejects those at load time, so this
+        fires only for specs constructed programmatically past the loader.
+        """
+        root = Path(worktree_root)
+        if self.eval_cwd is None:
+            return root
+        violation = eval_cwd_violation(self.eval_cwd)
+        if violation is not None:
+            raise ValueError(violation)
+        return root / self.eval_cwd
 
 
 @dataclass

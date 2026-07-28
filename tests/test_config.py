@@ -270,6 +270,62 @@ def test_eval_cwd_defaults_to_none(tmp_path):
     assert spec.eval_cwd is None
 
 
+@pytest.mark.parametrize(
+    "bad",
+    [
+        "/tmp/bench",  # POSIX absolute
+        "C:/bench",  # Windows drive-anchored
+        "//server/share",  # UNC
+        "bench/../../etc",  # relative, but escapes the tree via traversal
+    ],
+)
+def test_non_relative_eval_cwd_rejected_at_load(tmp_path, bad):
+    """Anchored or tree-escaping ``eval_cwd`` fails at manifest load.
+
+    Every candidate resolves ``eval_cwd`` against its own worktree; a
+    value that escapes the tree points all parallel candidates at one
+    shared directory. Inputs cover each escape flavour on all platforms.
+    """
+    manifest = tmp_path / "agent-evolve.yaml"
+    manifest.write_text(textwrap.dedent(f"""
+        problem:
+          description: x
+          mode: algorithm
+          eval_command: echo
+          eval_cwd: "{bad}"
+          metrics:
+            - {{name: m, optimise: minimize}}
+        scope: {{target_files: [a]}}
+        backend: {{type: local}}
+    """))
+    with pytest.raises(ManifestError, match="working tree"):
+        load_manifest(manifest)
+
+
+def test_resolved_eval_cwd_joins_candidate_tree(sample_spec, tmp_path):
+    """Unset ``eval_cwd`` resolves to the tree root itself; a relative value
+    is joined INSIDE the given candidate tree — two trees, two answers."""
+    import dataclasses
+
+    assert sample_spec.resolved_eval_cwd(tmp_path) == tmp_path
+
+    spec = dataclasses.replace(sample_spec, eval_cwd="bench/perf")
+    tree_a = tmp_path / "candidate-1"
+    tree_b = tmp_path / "candidate-2"
+    assert spec.resolved_eval_cwd(tree_a) == tree_a / "bench" / "perf"
+    assert spec.resolved_eval_cwd(tree_b) == tree_b / "bench" / "perf"
+
+
+def test_resolved_eval_cwd_rejects_programmatic_absolute(sample_spec, tmp_path):
+    """Specs built in code (bypassing the loader) still cannot smuggle an
+    absolute eval_cwd past the per-candidate resolution."""
+    import dataclasses
+
+    spec = dataclasses.replace(sample_spec, eval_cwd="C:/shared/bench")
+    with pytest.raises(ValueError, match="working tree"):
+        spec.resolved_eval_cwd(tmp_path)
+
+
 def test_branch_cleanup_defaults_to_archive(tmp_path):
     """The default ``safety.branch_cleanup`` is ``"archive"``."""
     manifest = tmp_path / "agent-evolve.yaml"

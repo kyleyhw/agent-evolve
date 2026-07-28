@@ -23,6 +23,7 @@ from agent_evolve.models import (
     SafetySpec,
     ScopeSpec,
     SiblingSpec,
+    eval_cwd_violation,
 )
 
 
@@ -72,7 +73,7 @@ def _parse(raw: dict[str, Any], *, source: Path) -> ProblemSpec:
         description=_require(problem, "description", str, source, ctx="problem."),
         mode=problem.get("mode", "runtime"),
         eval_command=_require(problem, "eval_command", str, source, ctx="problem."),
-        eval_cwd=_optional_str(problem.get("eval_cwd")),
+        eval_cwd=_parse_eval_cwd(problem.get("eval_cwd"), source),
         expected_baseline=_parse_expected_baseline(problem.get("expected_baseline"), source),
         expected_baseline_tolerance=_parse_tolerance(
             problem.get("expected_baseline_tolerance", 0.05), source
@@ -131,6 +132,24 @@ def _optional_str(value: Any) -> str | None:
     if isinstance(value, str):
         return value or None
     return str(value)
+
+
+def _parse_eval_cwd(value: Any, source: Path) -> str | None:
+    """Validate ``problem.eval_cwd`` is a tree-relative path (or absent).
+
+    Anchored paths and ``..`` traversal are rejected here, at load time,
+    because every candidate resolves ``eval_cwd`` against its own isolated
+    worktree (:meth:`ProblemSpec.resolved_eval_cwd`) — a value that
+    escapes the tree would collapse all parallel candidates into one
+    shared eval directory.
+    """
+    v = _optional_str(value)
+    if v is None:
+        return None
+    violation = eval_cwd_violation(v)
+    if violation is not None:
+        raise ManifestError(f"{source}: problem.{violation}")
+    return v
 
 
 def _parse_expected_baseline(value: Any, source: Path) -> dict[str, float] | None:
