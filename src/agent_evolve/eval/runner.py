@@ -15,6 +15,7 @@ with that — typically records the metrics as-is and lets the reviewer reject.
 from __future__ import annotations
 
 import json
+import os
 import re
 import shlex
 import subprocess
@@ -151,6 +152,7 @@ def run_eval(
     cwd: str | Path | None = None,
     timeout: float | None = None,
     env: dict[str, str] | None = None,
+    scratch: str | Path | None = None,
 ) -> EvalResult:
     """Run an eval command and capture its metrics.
 
@@ -158,14 +160,42 @@ def run_eval(
     Strings are split with :func:`shlex.split` in POSIX mode on all platforms —
     this means quoted arguments work uniformly and Windows paths should use
     forward slashes (e.g. ``"python C:/app/run.py"``) or be passed as a list.
+
+    *env* entries are MERGED over a copy of the parent environment, never
+    passed through raw — handing a partial dict straight to
+    ``subprocess.run`` would replace the child environment wholesale,
+    dropping ``PATH`` (and ``SYSTEMROOT`` on Windows, without which a
+    child Python fails to start).
+
+    Scratch isolation
+    -----------------
+    Git worktrees isolate *repository* paths only. An eval that writes to
+    a fixed absolute location (``/tmp/foo``, ``C:/tmp/foo``) hits the SAME
+    directory from every candidate in every worktree, silently
+    interleaving concurrent runs. *scratch* is the remedy: the supervisor
+    passes a fresh per-candidate directory, which is created if missing
+    and exported to the child as ``AGENT_EVOLVE_SCRATCH``. An eval that
+    caches or writes outside its working tree MUST honour
+    ``AGENT_EVOLVE_SCRATCH``; any fixed absolute scratch path corrupts
+    concurrent runs.
     """
     argv = list(command) if isinstance(command, list) else shlex.split(command)
+    child_env = os.environ.copy()
+    if env:
+        child_env.update(env)
+    if scratch is not None:
+        scratch_path = Path(scratch)
+        # Created here so every eval can rely on the directory existing —
+        # the contract is "write into $AGENT_EVOLVE_SCRATCH", not "mkdir it
+        # first".
+        scratch_path.mkdir(parents=True, exist_ok=True)
+        child_env["AGENT_EVOLVE_SCRATCH"] = str(scratch_path)
     start = time.perf_counter()
     try:
         proc = subprocess.run(
             argv,
             cwd=cwd,
-            env=env,
+            env=child_env,
             capture_output=True,
             text=True,
             timeout=timeout,

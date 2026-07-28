@@ -84,6 +84,61 @@ def test_score_convenience_returns_first_numeric(tmp_path):
     assert r.score == 42.1
 
 
+def test_scratch_exported_and_distinct_per_call(tmp_path):
+    """``AGENT_EVOLVE_SCRATCH`` reaches the child, the directory is created
+    by the runner, and two calls with different *scratch* values see
+    different paths — the per-candidate guard against absolute-path
+    collisions across concurrent worktrees."""
+    code = (
+        "import json, os\n"
+        "print(json.dumps({'scratch_set': 'AGENT_EVOLVE_SCRATCH' in os.environ}))\n"
+        "print('SCRATCH=' + os.environ.get('AGENT_EVOLVE_SCRATCH', ''))\n"
+    )
+    cmd = _py(code, tmp_path)
+    s1 = tmp_path / "cand-1.scratch"
+    s2 = tmp_path / "cand-2.scratch"
+    r1 = run_eval(cmd, scratch=s1)
+    r2 = run_eval(cmd, scratch=s2)
+
+    assert r1.metrics["scratch_set"] == 1.0
+    assert s1.is_dir() and s2.is_dir()  # created by the runner, not the eval
+    seen1 = r1.stdout.strip().splitlines()[-1].removeprefix("SCRATCH=")
+    seen2 = r2.stdout.strip().splitlines()[-1].removeprefix("SCRATCH=")
+    assert seen1 == str(s1)
+    assert seen2 == str(s2)
+    assert seen1 != seen2
+
+
+def test_partial_env_merges_over_parent(tmp_path):
+    """A partial *env* dict must not wipe the inherited environment: PATH
+    survives alongside the extra variable. (Under the old replace
+    semantics a child Python on Windows would not even start — no
+    SYSTEMROOT — so this pins the merge behaviour.)"""
+    code = (
+        "import json, os\n"
+        "print(json.dumps({\n"
+        "    'has_path': bool(os.environ.get('PATH')),\n"
+        "    'marker_ok': os.environ.get('AGENT_EVOLVE_MARKER') == 'x',\n"
+        "}))\n"
+    )
+    r = run_eval(_py(code, tmp_path), env={"AGENT_EVOLVE_MARKER": "x"})
+    assert r.passed
+    assert r.metrics["has_path"] == 1.0
+    assert r.metrics["marker_ok"] == 1.0
+
+
+def test_no_scratch_means_no_env_var(tmp_path, monkeypatch):
+    """Without *scratch* the runner must not invent ``AGENT_EVOLVE_SCRATCH``
+    (delenv guards against one inherited from the test session itself)."""
+    monkeypatch.delenv("AGENT_EVOLVE_SCRATCH", raising=False)
+    code = (
+        "import json, os\n"
+        "print(json.dumps({'scratch_set': 'AGENT_EVOLVE_SCRATCH' in os.environ}))\n"
+    )
+    r = run_eval(_py(code, tmp_path))
+    assert r.metrics["scratch_set"] == 0.0
+
+
 def test_validate_baseline_passes_within_tolerance():
     """Drift inside tolerance yields ``matches=True``."""
     from agent_evolve.eval import validate_baseline
