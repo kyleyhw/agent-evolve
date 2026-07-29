@@ -280,7 +280,12 @@ def test_seed_sibling_writes_renamed_file_alongside_original(tmp_path):
     assert result.original_symbol == "Strategy"
     assert result.new_symbol == "StrategyMultiasset20260430"
 
-    new_path = Path(result.new_path)
+    # Repo-root-relative POSIX — the dialect scope patterns and
+    # `git diff --name-only` speak; absolute paths would never fnmatch.
+    assert result.original_path == "src/strategy.py"
+    assert result.new_path == "src/strategy_multiasset_2026_04_30.py"
+
+    new_path = tmp_path / result.new_path
     assert new_path.exists()
     assert new_path.parent == src_dir
     assert new_path.name == "strategy_multiasset_2026_04_30.py"
@@ -307,7 +312,8 @@ def test_seed_sibling_honours_custom_output_dir(tmp_path):
     result = seed_sibling(
         spec, problem_id="x", today=date(2026, 4, 30), repo_root=tmp_path,
     )
-    new_path = Path(result.new_path)
+    assert result.new_path == "generated/strategies/strategy_x_2026_04_30.py"
+    new_path = tmp_path / result.new_path
     assert new_path.parent == tmp_path / "generated" / "strategies"
     assert new_path.exists()
 
@@ -378,7 +384,7 @@ def test_seed_sibling_uses_explicit_symbol_name(tmp_path):
     )
     assert result.original_symbol == "B"
     assert result.new_symbol == "BX20260430"
-    assert "class BX20260430: pass" in Path(result.new_path).read_text()
+    assert "class BX20260430: pass" in (tmp_path / result.new_path).read_text()
 
 
 def test_seed_sibling_errors_when_pattern_produces_invalid_identifier(tmp_path):

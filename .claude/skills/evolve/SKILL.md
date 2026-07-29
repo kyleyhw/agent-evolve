@@ -30,8 +30,9 @@ coherent and terminate it with a single winning PR open for human approval.
    in Termination — a valid outcome, not a failure to paper over.
 6. **Every candidate gets its own worktree**. Before an explorer is
    dispatched, create a dedicated working tree for its branch
-   (`agent_evolve.worktree.create_worktree`), anchored at the protected
-   branch's SHA. Never point two explorers at one tree, and never let an
+   (`agent_evolve.worktree.create_worktree`), anchored at the run's
+   fixed base SHA (the protected branch's tip at Phase 0b; the seed
+   commit in sibling mode). Never point two explorers at one tree, and never let an
    explorer work in the user's checkout: N agents checking out N branches
    in a shared directory silently overwrite each other's files, and every
    measurement downstream of that is garbage. `create_worktree` raises
@@ -161,8 +162,10 @@ from agent_evolve.worktree import create_worktree
 
 # 1. Materialise the protected branch at a FIXED SHA in its own worktree —
 #    never measure in the user's checkout (their uncommitted state would
-#    leak into the baseline). This SHA is the anchor every candidate
-#    shares; if it cannot be resolved, stop before spending any budget.
+#    leak into the baseline). This SHA is the run's anchor: resolve it
+#    ONCE, here, and reuse it for every candidate worktree in every round
+#    (Phase 0c re-anchors it to the seed commit in sibling mode). If it
+#    cannot be resolved, stop before spending any budget.
 anchor = current_sha(spec.safety.protected_branch)
 if anchor is None:
     raise RuntimeError(f"cannot resolve {spec.safety.protected_branch!r} to a SHA")
@@ -188,15 +191,11 @@ if not check.matches:
     # toward a number that does not reflect production behaviour.
     raise RuntimeError(f"baseline mismatch — aborting:\n{check.message}")
 
-# 3. Record the measured baseline as the round-0 anchor. The trait
-#    matrix and the reviewer's metrics_improved check both read this.
-backend.update_graph(
-    mermaid="",
-    html_path=None,
-)
-# Persist the baseline measurement on the problem root so the reviewer
-# can read it. Local backend: write to <problem>/baseline.json. Github
-# backend: include in the issue body under a ## Baseline section.
+# 3. Persist the measured baseline on the problem root so the reviewer
+#    and later rounds can read it — the trait matrix and the reviewer's
+#    metrics_improved check both anchor to this measurement.
+#    Local backend: write <problem>/baseline.json.
+#    GitHub / GitLab: a "## Baseline" section in the problem issue body.
 ```
 
 When `spec.expected_baseline is None`, `validate_baseline` returns
@@ -273,19 +272,58 @@ problem-id as-is; `{date}` = `YYYY_MM_DD`.
 
 ### Seed step (sibling mode only)
 
-Run this between Phase 0b and round 1 of Phase A:
+Run this between Phase 0b and round 1 of Phase A. Three obligations,
+all load-bearing:
+
+1. **Seed in a worktree and COMMIT.** Candidate trees are materialised
+   from the run anchor — an uncommitted seed file in anyone's checkout
+   is invisible to every candidate.
+2. **Re-anchor the run.** After the seed commit, the run's `anchor` IS
+   the seed commit; every candidate worktree created in Phase C
+   (`base=anchor`) then inherits the seeded file.
+3. **Re-derive the spec with `dataclasses.replace`.** `ScopeSpec` and
+   `ProblemSpec` are both frozen — attribute assignment raises
+   `FrozenInstanceError`. Build a new spec; never mutate.
 
 ```python
+from dataclasses import replace
 from agent_evolve.artifact import seed_sibling
+from agent_evolve.git_utils import current_sha
+from agent_evolve.worktree import create_worktree
 
 if spec.artifact_mode == "sibling":
-    seed = seed_sibling(spec)              # writes the new file, renames symbol
-    spec.scope.target_files = [seed.new_path]
-    spec.scope.do_not_touch = list(spec.scope.do_not_touch) + [seed.original_path]
+    seed_wt = create_worktree(
+        f"evolve/{problem_id}/seed", repo=repo_root, base=anchor,
+    )
+    # Writes the renamed sibling file into the seed tree. The returned
+    # paths are repo-root-relative POSIX — exactly what scope patterns
+    # and git diffs speak.
+    seed = seed_sibling(spec, problem_id=problem_id, repo_root=seed_wt.path)
+
+    # Commit inside the seed tree, then re-anchor the run to the seed
+    # commit (same pseudo-helper convention as git_diff below: add -A +
+    # commit in that tree).
+    git_commit_all(seed_wt.path, f"seed sibling artifact for {problem_id}")
+    anchor = current_sha(f"evolve/{problem_id}/seed", cwd=seed_wt.path)
+
+    # Frozen dataclasses: derive, don't mutate.
+    spec = replace(
+        spec,
+        scope=replace(
+            spec.scope,
+            target_files=[seed.new_path],
+            do_not_touch=[*spec.scope.do_not_touch, seed.original_path],
+        ),
+    )
+
     # Phase 0b baseline must reproduce against the seeded file. Re-run
     # the eval with --strategy <new_symbol> (or whatever the eval CLI
     # uses) and compare to the original baseline within tolerance.
-    seed_eval = run_eval(spec.eval_command_for(seed.new_symbol), cwd=baseline_cwd)
+    seed_eval = run_eval(
+        spec.eval_command_for(seed.new_symbol),
+        cwd=spec.resolved_eval_cwd(seed_wt.path),
+        scratch=seed_wt.path.with_name(seed_wt.path.name + ".scratch"),
+    )
     seed_check = validate_baseline(
         measured=seed_eval.metrics,
         expected=baseline_eval.metrics,
@@ -497,10 +535,14 @@ Before any slot is dispatched, give its candidate an isolated tree
 (prime directive 6):
 
 ```python
-from agent_evolve.git_utils import current_sha
 from agent_evolve.worktree import create_worktree
 
-anchor = current_sha(spec.safety.protected_branch)   # ONE SHA for the whole run
+worktrees = {}   # candidate_id -> Worktree; read again in Phases D and E.5
+
+# `anchor` is the run's fixed base SHA from Phase 0b (the seed commit in
+# sibling mode — Phase 0c). Never re-resolve the protected branch here:
+# re-resolving each round would let a moving trunk split the run across
+# two different baselines.
 worktrees[cid] = create_worktree(
     f"evolve/{problem_id}/candidate-{cid}", repo=repo_root, base=anchor,
 )
@@ -739,14 +781,17 @@ After the final round:
    When `spec.safety.run_ablation_report` is `False`, skip this step
    entirely — useful when the eval is expensive and the human reviewer
    does not need the per-hunk breakdown.
-5. **Remove the run's worktrees, keep the branches.** For every
-   candidate tree, plus the baseline and ablation trees:
+5. **Remove the run's worktrees, keep the candidate branches.** For
+   every candidate tree, plus the baseline / seed / ablation trees:
    `remove_worktree(wt, repo=repo_root)` (best-effort by design — a
    cleanup failure must not kill a finished run), and delete each tree's
-   `.scratch` sibling with a plain directory removal. The BRANCHES stay:
-   `safety.branch_cleanup` governs them, and every commit remains
-   reachable for forensics. Trees are disposable; branches are the
-   record.
+   `.scratch` sibling with a plain directory removal. CANDIDATE branches
+   stay, governed by `safety.branch_cleanup` — every candidate commit
+   remains reachable for forensics. The utility branches
+   (`.../baseline`, `.../seed`, `.../ablation`) may be deleted outright:
+   baseline and ablation point at the anchor itself, and the seed commit
+   is the base of every candidate branch, so no commit becomes
+   unreachable. Trees are disposable; candidate branches are the record.
 6. Record the final PR URL in the problem root.
 7. **Stop.** Do not monitor the PR. Do not re-run. Do not merge.
 

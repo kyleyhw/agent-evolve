@@ -25,8 +25,6 @@ from urllib.error import HTTPError
 
 from agent_evolve.backends.base import EvolveBackend
 from agent_evolve.backends.github import (
-    EVOLVE_STATE_OPEN,
-    EVOLVE_STATE_CLOSE,
     RUN_METADATA_OPEN,
     RUN_METADATA_CLOSE,
     _now_iso,

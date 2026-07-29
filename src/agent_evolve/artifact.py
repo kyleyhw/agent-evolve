@@ -74,10 +74,18 @@ class SiblingSeedError(RuntimeError):
 class SeedResult:
     """Outcome of :func:`seed_sibling`.
 
-    The supervisor uses these fields to (a) update ``scope.target_files``
-    to point at the seeded file, (b) update ``scope.do_not_touch`` to
+    The supervisor uses these fields to (a) re-derive ``scope.target_files``
+    to point at the seeded file, (b) re-derive ``scope.do_not_touch`` to
     seal the canonical file, and (c) build the seed-validation eval
     command via ``spec.eval_command_for(new_symbol)``.
+
+    ``original_path`` and ``new_path`` are **repo-root-relative POSIX**
+    strings — the dialect scope patterns and ``git diff --name-only``
+    speak. Absolute paths here would never fnmatch a diff path, so the
+    scope enforcer would prune every sibling-mode candidate as
+    out-of-scope (and the canonical file's seal would silently not
+    seal). Resolve against the working tree in use when a real
+    filesystem path is needed: ``worktree_root / result.new_path``.
     """
 
     original_path: str
@@ -150,13 +158,22 @@ def seed_sibling(
     """Materialise the sibling artifact described by *spec*.
 
     The supervisor calls this between Phase 0b (baseline measurement)
-    and round 1 of Phase A. After it returns, the supervisor must:
+    and round 1 of Phase A, with *repo_root* pointing at a dedicated
+    seed worktree. After it returns, the supervisor must:
 
-    1. Set ``spec.scope.target_files = [result.new_path]`` so the
-       search targets the seeded sibling.
-    2. Append ``result.original_path`` to ``spec.scope.do_not_touch``
-       so candidates that try to mutate the canonical are auto-pruned
-       by the scope enforcer.
+    1. Commit the seeded file in that tree and re-anchor the run to the
+       seed commit — candidate worktrees are materialised from the run
+       anchor, so an uncommitted seed is invisible to every candidate.
+    2. Re-derive the spec with :func:`dataclasses.replace` — both
+       ``ProblemSpec`` and ``ScopeSpec`` are frozen, so attribute
+       assignment raises ``FrozenInstanceError``::
+
+           spec = replace(spec, scope=replace(
+               spec.scope,
+               target_files=[result.new_path],
+               do_not_touch=[*spec.scope.do_not_touch, result.original_path],
+           ))
+
     3. Run the eval against ``spec.eval_command_for(result.new_symbol)``
        and validate the metrics match the original baseline within
        ``spec.expected_baseline_tolerance``. A behaviour-preserving
@@ -244,11 +261,23 @@ def seed_sibling(
     new_path.write_text(new_source, encoding="utf-8")
 
     return SeedResult(
-        original_path=str(original_path),
-        new_path=str(new_path),
+        original_path=_repo_rel(original_path, repo_root_path),
+        new_path=_repo_rel(new_path, repo_root_path),
         original_symbol=original_symbol,
         new_symbol=new_symbol,
     )
+
+
+def _repo_rel(path: Path, root: Path) -> str:
+    """*path* as a repo-root-relative POSIX string.
+
+    Scope patterns and ``git diff --name-only`` both speak this dialect;
+    see the :class:`SeedResult` docstring for why absolute paths are
+    unusable there. Raises ``ValueError`` if *path* escapes *root* —
+    loud is correct, since a sibling seeded outside the repo can never
+    be committed or scoped.
+    """
+    return path.resolve().relative_to(root.resolve()).as_posix()
 
 
 def _find_unique_top_level_symbol(source: str, file_path: Path) -> str:

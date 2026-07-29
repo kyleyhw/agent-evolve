@@ -74,11 +74,36 @@ None — all 20 new tests passed on their first complete run, and the full
 suite (175 tests) passes with no regressions. No fixes were required
 during test development.
 
-## Incidental findings (not fixed — outside task scope)
+## Incidental findings
+
+All of the findings below were fixed in the follow-up coherence commit
+(same day), after the initial report flagged them as out of scope:
 
 - Three pre-existing ruff `F401` unused imports in `ablation.py:45` and
-  `backends/gitlab.py:28-29`.
-- `SKILL.md` Phase 0c assigns into frozen dataclasses
+  `backends/gitlab.py:28-29` — removed (verified genuinely unused: no
+  in-file usage, no external importer).
+- `SKILL.md` Phase 0c assigned into frozen dataclasses
   (`spec.scope.target_files = ...`); both `ScopeSpec` and `ProblemSpec`
   are frozen, so the documented sibling-mode flow would raise
-  `FrozenInstanceError`. Needs `dataclasses.replace` on both levels.
+  `FrozenInstanceError` — rewritten with `dataclasses.replace` on both
+  levels.
+
+The coherence sweep for that commit surfaced three further defects, all
+fixed and covered by the amended `test_artifact.py` assertions:
+
+- **`SeedResult` returned absolute paths** while `enforce_scope` matches
+  repo-relative POSIX paths from `git diff --name-only` — in sibling
+  mode every candidate would have been pruned as out-of-scope, and the
+  canonical file's `do_not_touch` seal would silently not seal. Paths
+  are now repo-root-relative POSIX (`_repo_rel`); tests assert the exact
+  relative form.
+- **Phase 0c seed visibility**: the seed file was written uncommitted,
+  but candidate worktrees materialise from the run anchor — no candidate
+  would ever have seen the sibling. The seed step now runs in a seed
+  worktree, commits, and re-anchors the run to the seed commit. (The
+  SKILL's `seed_sibling(spec)` call was also stale against the real
+  signature — `problem_id` is keyword-required.)
+- **Phase C re-resolved `current_sha` each round** (introduced in the
+  same day's Phase-4 edit) — a trunk moving between rounds would have
+  split the run across two baselines. Phase C now reuses the single
+  anchor resolved in Phase 0b.

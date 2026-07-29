@@ -95,8 +95,10 @@ slots the supervisor assigned you.
    `conclusion` about what you saw locally. Do not fake metrics — the
    supervisor runs the eval authoritatively.
 
-6. **Commit** to `evolve/<problem-id>/candidate-<id>` and return. Do not open
-   a PR yourself — the backend handles that.
+6. **Commit** to `evolve/<problem-id>/candidate-<id>` — the branch is
+   already checked out in your working tree, so a plain `git commit`
+   there lands on it; never `git checkout` elsewhere. Do not open a PR
+   yourself — the backend handles that.
 
 ## EVOLVE_STATE template
 

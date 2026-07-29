@@ -42,7 +42,7 @@ from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Literal
 
-from agent_evolve.eval.runner import EvalResult, run_eval
+from agent_evolve.eval.runner import run_eval
 
 
 AblationStatus = Literal["measured", "could_not_ablate", "eval_failed"]

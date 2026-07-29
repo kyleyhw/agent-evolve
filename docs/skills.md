@@ -207,7 +207,9 @@ evolve skill
  │     no disconfirmed hypothesis is re-dispatched unless the round
  │     plan names what differs this time
  │
- ├─► spawns /explorer × candidates_per_round (parallel via Agent tool)
+ ├─► creates one git worktree per candidate (<repo>.worktrees/<slug>,
+ │     all anchored at ONE fixed SHA of the protected branch), then
+ │     spawns /explorer × candidates_per_round (parallel via Agent tool)
  │     each explorer:
  │        1. reads parent candidate + EVOLVE_STATE + the lineage's
  │           disconfirmed-hypothesis list
@@ -219,7 +221,9 @@ evolve skill
  │
  ├─► for each returned candidate:
  │        scope.enforce_scope(diff, spec.scope)
- │        eval.run_eval(spec.eval_command)
+ │        eval.run_eval(spec.eval_command,
+ │                      cwd=spec.resolved_eval_cwd(<candidate tree>),
+ │                      scratch=<per-candidate dir>)   # AGENT_EVOLVE_SCRATCH
  │        equivalence.check_equivalence(baseline, candidate)  # runtime mode
  │        backend.score_candidate(id, metrics, equivalence=report)
  │
