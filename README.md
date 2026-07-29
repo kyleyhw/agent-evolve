@@ -582,7 +582,7 @@ examples/
 tests/
     test_backends.py  test_equivalence.py  test_eval_runner.py
     test_scope.py     test_viz.py          test_config.py
-    test_worktree.py
+    test_worktree.py  test_sibling_protocol.py
 ```
 
 ## References

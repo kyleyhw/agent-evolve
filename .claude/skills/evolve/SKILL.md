@@ -172,8 +172,19 @@ if anchor is None:
 baseline_wt = create_worktree(
     f"evolve/{problem_id}/baseline", repo=repo_root, base=anchor,
 )
+
+# In sibling mode, eval_command carries a literal {symbol} token; the
+# baseline measures the CANONICAL symbol, so substitute it here
+# (spec.sibling.symbol_name, or auto-detect the unique top-level symbol
+# the same way seed_sibling does). In replace mode this is a no-op —
+# the command has no token and eval_command_for returns it verbatim.
+baseline_cmd = (
+    spec.eval_command_for(canonical_symbol)
+    if spec.artifact_mode == "sibling"
+    else spec.eval_command
+)
 baseline_eval = run_eval(
-    spec.eval_command,
+    baseline_cmd,
     cwd=spec.resolved_eval_cwd(baseline_wt.path),
     scratch=baseline_wt.path.with_name(baseline_wt.path.name + ".scratch"),
 )

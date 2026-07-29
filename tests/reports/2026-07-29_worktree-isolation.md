@@ -107,3 +107,40 @@ fixed and covered by the amended `test_artifact.py` assertions:
   same day's Phase-4 edit) — a trunk moving between rounds would have
   split the run across two baselines. Phase C now reuses the single
   anchor resolved in Phase 0b.
+
+## Sibling-mode dry run (protocol execution) — same day
+
+**What**: the evolve SKILL's Phase 0b → 0c → C → D → cleanup sequence,
+executed *literally* with the real library APIs against a throwaway git
+repo — the empirical check of the protocol-text fixes above, which the
+unit suite cannot reach (markdown does not execute). Preserved as the
+permanent integration test `tests/test_sibling_protocol.py`.
+
+**Why these inputs**: the eval computes a deterministic
+$\sum_{i=1}^{5} i^2 = 55$, so the baseline/seed comparison is exact —
+any drift is a defect, not noise. The canonical class carries a
+class-level self-reference (`Strategy.scale`), making the sibling rename
+non-trivial: a rename that missed it would diverge and must be caught by
+the seed-validation gate. Candidate edits set `scale` to 2 and 3
+(→ 110 and 165), giving each tree a distinguishable metric; the eval
+writes its result into `AGENT_EVOLVE_SCRATCH`, making cross-candidate
+interleaving directly observable.
+
+**Result**: all stages passed — one-off script in 3.8 s; pytest form
+3.77 s (176 total suite tests, 21.29 s).
+
+| Stage | Verified |
+|---|---|
+| 0b | anchor resolved once; baseline measured in its own worktree; `expected_baseline` gate passes at exactly 55.0 |
+| 0c | seed written in seed worktree, committed; run re-anchored (SHA moved); spec re-derived via `dataclasses.replace`; seed eval reproduces baseline exactly |
+| C | both candidate trees **contain the committed seed** (the visibility fix); trees distinct |
+| explorers | edit in candidate 1 invisible in candidate 2 until its own edit; commits land per-branch |
+| D | real `git diff --name-only` output passes `enforce_scope` against replaced `target_files` (path-dialect fix); canonical file sealed via `do_not_touch`; per-tree metrics 110.0 / 165.0; each scratch dir holds only its own candidate's result |
+| cleanup | trees removed; candidate branches survive; utility branches deleted without orphaning any candidate commit (seed remains each candidate's ancestor) |
+
+**Finding F1 (fixed)**: Phase 0b ran `spec.eval_command` verbatim, but a
+sibling-mode command carries a literal `{symbol}` token — the baseline
+run would have failed to resolve any symbol. The SKILL now substitutes
+the canonical symbol (`eval_command_for`) in sibling mode; in replace
+mode the command has no token and is used verbatim, so the change is a
+no-op there.
